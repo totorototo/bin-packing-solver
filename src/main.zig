@@ -44,7 +44,7 @@ pub fn main() !void {
     // Export result to SVG
     std.debug.print("\n📁 Exporting result to SVG...\n", .{});
     var filename_buf: [128]u8 = undefined;
-    const filename = try std.fmt.bufPrint(&filename_buf, "astm_nesting_optimized_{d}.svg", .{std.time.timestamp()});
+    const filename = try std.fmt.bufPrint(&filename_buf, "nesting_{d}.svg", .{std.time.timestamp()});
     try bps.exportToSVG(result.placed_items.items, result.final_width, strip_height, filename, result.efficiency);
     std.debug.print("   Saved to: {s}\n", .{filename});
 }
