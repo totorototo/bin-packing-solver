@@ -147,7 +147,25 @@ zig build test
 
 # Run the example
 zig build run
+
+# Run benchmark suite
+zig build bench
+zig build bench -Doptimize=ReleaseFast  # for representative timing
 ```
+
+## Benchmarks
+
+`src/bench.zig` defines five deterministic cases with known theoretical lower bounds:
+
+| Case | Pieces | Strip width | Shape type |
+|------|--------|-------------|------------|
+| 01 identical squares | 20 | 5.0 | 1×1 squares |
+| 02 mixed rectangles | 12 | 10.0 | 1×2, 2×3, 3×4 rects |
+| 03 right triangles 4×3 | 16 | 8.0 | right triangles |
+| 04 hexagons r=2 | 12 | 14.0 | regular hexagons |
+| 05 stress mixed | 40 | 15.0 | squares + rects + triangles + hexagons |
+
+Each run reports `lower_bound` (total area / strip width), achieved `length`, `efficiency` %, and a `ratio` (1.000 = optimal). See [benchmarks/README.md](benchmarks/README.md) for reference results and interpretation.
 
 ## Algorithm
 
