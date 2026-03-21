@@ -10,7 +10,7 @@ pub fn main() !void {
     const random = prng.random();
 
     // Generate random convex polygons
-    const num_pieces = 20;
+    const num_pieces = 100;
     var pieces = std.ArrayList(bps.Polygon){};
     defer {
         for (pieces.items) |*p| p.deinit(allocator);
@@ -23,6 +23,7 @@ pub fn main() !void {
         try pieces.append(allocator, try bps.generateRandomConvex(allocator, random, size));
     }
 
+    const nesting_start = std.time.milliTimestamp();
     var result = try bps.performNesting(allocator, pieces.items, .{
         .strip_width = 50.0,
         .num_cores = 4,
@@ -32,6 +33,8 @@ pub fn main() !void {
         .verbose = true,
     });
     defer result.deinit();
+    const nesting_ms = std.time.milliTimestamp() - nesting_start;
+    std.debug.print("\nNesting time: {d}ms ({d:.1}s)\n", .{ nesting_ms, @as(f32, @floatFromInt(nesting_ms)) / 1000.0 });
 
     // Export result to SVG
     std.debug.print("\n📁 Exporting result to SVG...\n", .{});

@@ -51,41 +51,88 @@ pub fn main() !void {
     // try pieces.append(allocator, your_polygon);
 
     // Perform nesting
-    var result = try bps.performNesting(
-        allocator,
-        pieces.items,
-        50.0,  // strip_height
-        4,     // num_cores
-        20,    // population_per_core
-        100,   // generations
-        10,    // migration_interval
-    );
+    var result = try bps.performNesting(allocator, pieces.items, .{
+        .strip_width = 50.0,      // fixed dimension (e.g. fabric roll width)
+        .num_cores = 4,
+        .population_per_core = 20,
+        .generations = 100,
+        .migration_interval = 10,
+        .stagnation_limit = 20,   // stop early if no improvement (0 = disabled)
+        .grid_resolution = 5.0,   // placement grid step size
+        .verbose = false,
+    });
     defer result.deinit();
 
+    std.debug.print("Length: {d:.2}, Efficiency: {d:.2}%\n", .{
+        result.final_length,
+        result.efficiency,
+    });
+
     // Export to SVG
-    try bps.exportToSVG(result.placed_items.items, result.final_width, 50.0, "output.svg", result.efficiency);
+    try bps.exportToSVG(result.placed_items.items, result.final_length, 50.0, "output.svg", result.efficiency);
 }
 ```
 
 ## API
 
-### Main Functions
+### `performNesting`
 
-- `performNesting` - Run the genetic algorithm to find optimal placement
-- `performNestingWithConstraints` - Same as above but with rotation constraints per piece
+```zig
+pub fn performNesting(
+    allocator: std.mem.Allocator,
+    pieces: []Polygon,
+    config: NestingConfig,
+) !NestingResult
+```
+
+Runs the genetic algorithm to find an optimal placement. Returns a `NestingResult` that must be freed with `result.deinit()`.
+
+### `NestingConfig`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `strip_width` | `f32` | *(required)* | Fixed dimension of the strip (e.g. fabric roll width) |
+| `num_cores` | `usize` | `4` | Number of parallel GA populations |
+| `population_per_core` | `usize` | `20` | Chromosomes per population |
+| `generations` | `usize` | `100` | Maximum number of generations |
+| `migration_interval` | `usize` | `10` | Generations between cross-population migrations |
+| `stagnation_limit` | `usize` | `20` | Early stop after N generations without improvement (`0` = disabled) |
+| `grid_resolution` | `f32` | `5.0` | Placement grid step size (smaller = more precise, slower) |
+| `verbose` | `bool` | `false` | Print progress to stderr |
+| `piece_constraints` | `?[]const PieceConstraints` | `null` | Per-piece rotation constraints |
+
+### `NestingError`
+
+| Error | Description |
+|---|---|
+| `NoPieces` | Empty pieces slice |
+| `InvalidStripWidth` | `strip_width` ≤ 0 |
+| `InvalidNumCores` | `num_cores` = 0 |
+| `InvalidGridResolution` | `grid_resolution` ≤ 0 |
+| `PieceTooWideForStrip` | A piece's height exceeds `strip_width` |
+| `NonConvexPolygon` | A piece is not convex |
+
+### `NestingResult`
+
+| Field | Type | Description |
+|---|---|---|
+| `placed_items` | `ArrayList(PlacedItem)` | All placed polygons with position and rotation |
+| `final_length` | `f32` | Total strip length used (the minimized dimension) |
+| `efficiency` | `f32` | Area utilization percentage |
+| `best_fitness` | `f32` | Raw fitness value from the GA |
 
 ### Types
 
-- `Polygon` - Convex polygon representation
-- `Vec2` - 2D vector
-- `PlacedItem` - A placed polygon with position and rotation
-- `NestingResult` - Result containing placed items and statistics
-- `PieceConstraints` - Per-piece constraints (allowed rotations, etc.)
+- `Polygon` - Convex polygon with vertices, bounding box, and area
+- `Vec2` - 2D vector (`x`, `y`)
+- `PlacedItem` - A placed polygon with `pos`, `rotation`, and `piece_id`
+- `PieceConstraints` - Per-piece allowed rotation angles
+- `RotationConstraints` - Rotation constraint definitions
 
 ### Helpers
 
-- `generateRandomConvex` - Generate random convex polygons for testing
-- `exportToSVG` - Export placement results to SVG
+- `generateRandomConvex(allocator, random, size)` - Generate a random convex polygon
+- `exportToSVG(items, length, width, filename, efficiency)` - Export placement to SVG
 
 ## Building
 
@@ -104,10 +151,11 @@ zig build run
 
 The solver uses a Biased Random-Key Genetic Algorithm (BRKGA) with:
 
-1. **Encoding**: Each chromosome contains a permutation (placement order) and rotation angles
-2. **Decoding**: Bottom-left-fill heuristic with collision detection
-3. **Selection**: Elitist selection with biased crossover
-4. **Migration**: Best solutions migrate between parallel populations
+1. **Encoding** - Each chromosome contains a permutation (placement order) and rotation angles per piece
+2. **Decoding** - Bottom-left-fill heuristic with AABB broad-phase + SAT collision detection
+3. **Selection** - Elitist selection with biased crossover (30% elite, 20% mutants)
+4. **Migration** - Best solutions migrate between parallel populations every N generations
+5. **Early stop** - Stagnation detection halts cores that stop improving
 
 ## License
 
