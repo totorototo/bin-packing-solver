@@ -11,7 +11,7 @@ pub const GeneticAlgorithm = struct {
     population: []Chromosome,
     pieces: []Polygon,
     rotation_angles: []const f32,
-    strip_height: f32,
+    strip_width: f32,
     grid_resolution: f32,
     allocator: std.mem.Allocator,
     random: std.Random,
@@ -21,7 +21,7 @@ pub const GeneticAlgorithm = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         pieces: []Polygon,
-        strip_height: f32,
+        strip_width: f32,
         grid_resolution: f32,
         pop_size: usize,
         elite_sz: usize,
@@ -42,7 +42,7 @@ pub const GeneticAlgorithm = struct {
             .population = pop,
             .pieces = pieces,
             .rotation_angles = &[_]f32{ 0, 45, 90, 135, 180, 225, 270, 315 },
-            .strip_height = strip_height,
+            .strip_width = strip_width,
             .grid_resolution = grid_resolution,
             .allocator = allocator,
             .random = rand,
@@ -64,7 +64,7 @@ pub const GeneticAlgorithm = struct {
     }
 
     pub fn evaluateFitness(self: *GeneticAlgorithm, chromo: *Chromosome) !void {
-        var packer = Packer.init(self.allocator, self.strip_height, self.grid_resolution);
+        var packer = Packer.init(self.allocator, self.strip_width, self.grid_resolution);
         defer packer.deinit();
 
         for (chromo.sequence) |piece_idx| {
@@ -81,7 +81,7 @@ pub const GeneticAlgorithm = struct {
             }
         }
         chromo.placement_failed = false;
-        chromo.fitness = packer.getMaxWidth();
+        chromo.fitness = packer.getLength();
     }
 
     pub fn evaluateAll(self: *GeneticAlgorithm) !void {

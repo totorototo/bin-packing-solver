@@ -24,7 +24,7 @@ pub fn main() !void {
     }
 
     var result = try bps.performNesting(allocator, pieces.items, .{
-        .strip_height = 50.0,
+        .strip_width = 50.0,
         .num_cores = 4,
         .population_per_core = 20,
         .generations = 100,
@@ -37,6 +37,6 @@ pub fn main() !void {
     std.debug.print("\n📁 Exporting result to SVG...\n", .{});
     var filename_buf: [128]u8 = undefined;
     const filename = try std.fmt.bufPrint(&filename_buf, "nesting_{d}.svg", .{std.time.timestamp()});
-    try bps.exportToSVG(result.placed_items.items, result.final_width, 50.0, filename, result.efficiency);
+    try bps.exportToSVG(result.placed_items.items, result.final_length, 50.0, filename, result.efficiency);
     std.debug.print("   Saved to: {s}\n", .{filename});
 }

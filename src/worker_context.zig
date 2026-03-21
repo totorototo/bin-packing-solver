@@ -8,7 +8,7 @@ pub const WorkerContext = struct {
     core_id: usize,
     pieces: []Polygon,
     piece_constraints: ?[]const PieceConstraints = null,
-    strip_height: f32,
+    strip_width: f32,
     population_size: usize,
     elite_size: usize,
     mutant_size: usize,

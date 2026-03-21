@@ -14,7 +14,7 @@ const exportToSVG = @import("helpers.zig").exportToSVG;
 const workerThread = @import("worker_thread.zig").workerThread;
 
 pub const NestingConfig = struct {
-    strip_height: f32,
+    strip_width: f32,
     num_cores: usize = 4,
     population_per_core: usize = 20,
     generations: usize = 100,
@@ -28,10 +28,10 @@ pub const NestingConfig = struct {
 
 pub const NestingError = error{
     NoPieces,
-    InvalidStripHeight,
+    InvalidStripWidth,
     InvalidNumCores,
     InvalidGridResolution,
-    PieceTooTallForStrip,
+    PieceTooWideForStrip,
     NonConvexPolygon,
 };
 
@@ -41,11 +41,11 @@ pub fn performNesting(
     config: NestingConfig,
 ) !NestingResult {
     if (pieces.len == 0) return NestingError.NoPieces;
-    if (config.strip_height <= 0) return NestingError.InvalidStripHeight;
+    if (config.strip_width <= 0) return NestingError.InvalidStripWidth;
     if (config.num_cores == 0) return NestingError.InvalidNumCores;
     if (config.grid_resolution <= 0) return NestingError.InvalidGridResolution;
     for (pieces) |p| {
-        if (p.height > config.strip_height) return NestingError.PieceTooTallForStrip;
+        if (p.height > config.strip_width) return NestingError.PieceTooWideForStrip;
         if (!p.isConvex()) return NestingError.NonConvexPolygon;
     }
 
@@ -77,7 +77,7 @@ pub fn performNesting(
             .core_id = i,
             .pieces = pieces,
             .piece_constraints = config.piece_constraints,
-            .strip_height = config.strip_height,
+            .strip_width = config.strip_width,
             .population_size = config.population_per_core,
             .elite_size = elite_size,
             .mutant_size = mutant_size,
@@ -118,7 +118,7 @@ pub fn performNesting(
     if (config.verbose) {
         std.debug.print("\nMulti-core GA Complete!\n", .{});
         std.debug.print("   Best solution from: Core {d}\n", .{global_best_idx});
-        std.debug.print("   Best fitness (strip length): {d:.2}\n", .{contexts[global_best_idx].best_fitness});
+        std.debug.print("   Best fitness (strip length used): {d:.2}\n", .{contexts[global_best_idx].best_fitness});
         std.debug.print("   Total time: {d}ms ({d:.1}s)\n", .{ elapsed, @as(f32, @floatFromInt(elapsed)) / 1000.0 });
         std.debug.print("   Time per piece: {d:.1}s\n", .{@as(f32, @floatFromInt(elapsed)) / 1000.0 / @as(f32, @floatFromInt(pieces.len))});
         std.debug.print("\nCreating final packing from best solution...\n", .{});
@@ -126,7 +126,7 @@ pub fn performNesting(
 
     const best_chromo = contexts[global_best_idx].best_result;
 
-    var final_packer = Packer.init(allocator, config.strip_height, config.grid_resolution);
+    var final_packer = Packer.init(allocator, config.strip_width, config.grid_resolution);
     defer final_packer.deinit();
 
     var skipped_pieces: usize = 0;
@@ -140,11 +140,11 @@ pub fn performNesting(
         } else {
             skipped_pieces += 1;
             if (config.verbose) {
-                std.debug.print("   Warning: Piece {d} could not be placed (size: {d:.1}x{d:.1}, strip height: {d:.1})\n", .{
+                std.debug.print("   Warning: Piece {d} could not be placed (size: {d:.1}x{d:.1}, strip width: {d:.1})\n", .{
                     piece_idx,
                     rotated.width,
                     rotated.height,
-                    config.strip_height,
+                    config.strip_width,
                 });
             }
         }
@@ -157,12 +157,12 @@ pub fn performNesting(
                 pieces.len,
             });
         }
-        const final_width = final_packer.getMaxWidth();
-        std.debug.print("   Strip dimensions: {d:.2} x {d:.2}\n", .{ final_width, config.strip_height });
+        const final_length = final_packer.getLength();
+        std.debug.print("   Strip dimensions: {d:.2} x {d:.2}\n", .{ final_length, config.strip_width });
         std.debug.print("   Efficiency: {d:.2}%\n", .{final_packer.calculateEfficiency()});
     }
 
-    const final_width = final_packer.getMaxWidth();
+    const final_length = final_packer.getLength();
     const efficiency = final_packer.calculateEfficiency();
 
     var result_items = std.ArrayList(PlacedItem){};
@@ -184,7 +184,7 @@ pub fn performNesting(
         .placed_items = result_items,
         .best_fitness = contexts[global_best_idx].best_fitness,
         .efficiency = efficiency,
-        .final_width = final_width,
+        .final_length = final_length,
         .allocator = allocator,
     };
 }
@@ -209,7 +209,7 @@ test "performNesting with random convex polygons" {
     }
 
     var result = try performNesting(allocator, pieces.items, .{
-        .strip_height = 50.0,
+        .strip_width = 50.0,
         .num_cores = num_cores,
         .population_per_core = 10,
         .generations = 50,
@@ -220,13 +220,13 @@ test "performNesting with random convex polygons" {
     // Debug output
     std.debug.print("\n📊 Test Results:\n", .{});
     std.debug.print("   Pieces placed: {d}/{d}\n", .{ result.placed_items.items.len, num_pieces });
-    std.debug.print("   Final width: {d:.2}\n", .{result.final_width});
+    std.debug.print("   Final width: {d:.2}\n", .{result.final_length});
     std.debug.print("   Best fitness: {d:.2}\n", .{result.best_fitness});
     std.debug.print("   Efficiency: {d:.2}%\n\n", .{result.efficiency});
 
     // Verify we got valid results
     try std.testing.expect(result.placed_items.items.len > 0);
-    try std.testing.expect(result.final_width > 0);
+    try std.testing.expect(result.final_length > 0);
     try std.testing.expect(result.efficiency > 0);
     try std.testing.expect(result.best_fitness > 0);
 }

@@ -19,7 +19,7 @@ pub fn workerThread(ctx: *WorkerContext) !void {
     var ga = try GeneticAlgorithm.init(
         ctx.allocator,
         ctx.pieces,
-        ctx.strip_height,
+        ctx.strip_width,
         ctx.grid_resolution,
         ctx.population_size,
         ctx.elite_size,

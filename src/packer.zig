@@ -5,15 +5,15 @@ const PlacedItem = @import("placed_item.zig").PlacedItem;
 const isOverlappingSAT = @import("sat.zig").isOverlappingSAT;
 
 pub const Packer = struct {
-    strip_height: f32,
+    strip_width: f32,
     placed_items: std.ArrayList(PlacedItem),
     grid_resolution: f32,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, height: f32, grid_resolution: f32) Packer {
+    pub fn init(allocator: std.mem.Allocator, strip_width: f32, grid_resolution: f32) Packer {
         return .{
             .allocator = allocator,
-            .strip_height = height,
+            .strip_width = strip_width,
             .grid_resolution = grid_resolution,
             .placed_items = .{},
         };
@@ -34,7 +34,7 @@ pub const Packer = struct {
 
     fn checkOverlap(self: *Packer, poly: Polygon, test_pos: Vec2) bool {
         if (test_pos.x < 0 or test_pos.y < 0) return true;
-        if (test_pos.y + poly.height > self.strip_height) return true;
+        if (test_pos.y + poly.height > self.strip_width) return true;
 
         for (self.placed_items.items) |item| {
             if (!aabbOverlap(test_pos, poly.width, poly.height, item.pos, item.poly.width, item.poly.height)) continue;
@@ -46,14 +46,14 @@ pub const Packer = struct {
     }
 
     pub fn placePolygon(self: *Packer, poly: Polygon, piece_id: usize, rotation: f32) !?PlacedItem {
-        const max_search_width = self.getMaxWidth() + poly.width + 50.0;
+        const max_search_length = self.getLength() + poly.width + 50.0;
         var best_pos: ?Vec2 = null;
         var best_x: f32 = std.math.floatMax(f32);
 
         var x: f32 = 0;
-        while (x <= max_search_width) : (x += self.grid_resolution) {
+        while (x <= max_search_length) : (x += self.grid_resolution) {
             var y: f32 = 0;
-            while (y <= self.strip_height - poly.height) : (y += self.grid_resolution) {
+            while (y <= self.strip_width - poly.height) : (y += self.grid_resolution) {
                 const test_pos = Vec2.init(x, y);
                 if (!self.checkOverlap(poly, test_pos)) {
                     if (x < best_x) {
@@ -80,7 +80,7 @@ pub const Packer = struct {
         return null;
     }
 
-    pub fn getMaxWidth(self: *Packer) f32 {
+    pub fn getLength(self: *Packer) f32 {
         var max_x: f32 = 0;
         for (self.placed_items.items) |item| {
             max_x = @max(max_x, item.pos.x + item.poly.width);
@@ -90,11 +90,11 @@ pub const Packer = struct {
 
     pub fn calculateEfficiency(self: *Packer) f32 {
         var total_area: f32 = 0;
-        const max_x = self.getMaxWidth();
+        const max_x = self.getLength();
         for (self.placed_items.items) |item| {
             total_area += item.poly.area;
         }
-        const used_area = self.strip_height * max_x;
+        const used_area = self.strip_width * max_x;
         if (used_area < 0.0001) return 0;
         return (total_area / used_area) * 100.0;
     }
