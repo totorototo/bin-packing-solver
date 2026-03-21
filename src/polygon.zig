@@ -53,16 +53,21 @@ pub const Polygon = struct {
             const n = @as(f32, @floatFromInt(self.vertices.len));
             return Vec2.init(cx / n, cy / n);
         }
+        // Accumulate signed area and centroid in one pass.
+        // Using signed_area2 (= 2 * signed area) preserves orientation so
+        // the result is correct for both CCW and CW polygons without @abs().
         var cx: f32 = 0;
         var cy: f32 = 0;
+        var signed_area2: f32 = 0;
         for (0..self.vertices.len) |i| {
             const j = (i + 1) % self.vertices.len;
             const cross = self.vertices[i].x * self.vertices[j].y - self.vertices[j].x * self.vertices[i].y;
+            signed_area2 += cross;
             cx += (self.vertices[i].x + self.vertices[j].x) * cross;
             cy += (self.vertices[i].y + self.vertices[j].y) * cross;
         }
-        const factor = 1.0 / (6.0 * area);
-        return Vec2.init(@abs(cx * factor), @abs(cy * factor));
+        const factor = 1.0 / (3.0 * signed_area2);
+        return Vec2.init(cx * factor, cy * factor);
     }
 
     /// Translate polygon so all coordinates start exactly at (0, 0)

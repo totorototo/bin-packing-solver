@@ -21,7 +21,10 @@ pub const WorkerContext = struct {
     seed: u64,
     verbose: bool = false,
     use_nfp: bool = false,
+    mutation_rate: f32 = 0.05,
+    /// Absolute deadline in milliseconds (from std.time.milliTimestamp). Null = no timeout.
+    timeout_end_ms: ?i64 = null,
 
-    best_result: Chromosome = undefined,
+    best_result: ?Chromosome = null,
     best_fitness: f32 = std.math.floatMax(f32),
 };

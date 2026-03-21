@@ -98,15 +98,29 @@ pub const Packer = struct {
             for (nfp_parts_list[idx]) |part| {
                 for (part.vertices) |v| {
                     const abs = item.pos.add(v);
-                    try candidates.append(self.allocator, abs);
-                    try candidates.append(self.allocator, Vec2.init(abs.x, 0));
-                    try candidates.append(self.allocator, Vec2.init(0, abs.y));
-                    if (self.strip_width > poly.height) {
-                        try candidates.append(self.allocator, Vec2.init(abs.x, self.strip_width - poly.height));
+                    // Pre-filter: skip candidates that are trivially outside valid bounds.
+                    // checkOverlapNFP would reject these anyway, but skipping early avoids
+                    // the full NFP collision test for out-of-bounds positions.
+                    if (abs.x >= 0) {
+                        try candidates.append(self.allocator, abs);
+                        try candidates.append(self.allocator, Vec2.init(abs.x, 0));
+                        if (self.strip_width > poly.height)
+                            try candidates.append(self.allocator, Vec2.init(abs.x, self.strip_width - poly.height));
                     }
+                    if (abs.y >= 0 and abs.y + poly.height <= self.strip_width)
+                        try candidates.append(self.allocator, Vec2.init(0, abs.y));
                 }
             }
         }
+
+        // Sort by x (then y) so we can break as soon as x exceeds the best found so far.
+        std.mem.sort(Vec2, candidates.items, {}, struct {
+            fn lessThan(_: void, a: Vec2, b: Vec2) bool {
+                if (a.x < b.x - 1e-6) return true;
+                if (a.x > b.x + 1e-6) return false;
+                return a.y < b.y;
+            }
+        }.lessThan);
 
         // Select the leftmost (then bottommost) valid candidate.
         var best_pos: ?Vec2 = null;
@@ -114,6 +128,8 @@ pub const Packer = struct {
         var best_y: f32 = std.math.floatMax(f32);
 
         for (candidates.items) |candidate| {
+            // Since candidates are sorted by x, once we're past best_x we can stop.
+            if (best_pos != null and candidate.x > best_x + 1e-6) break;
             if (self.checkOverlapNFP(poly, candidate, nfp_parts_list)) continue;
             if (candidate.x < best_x - 1e-6 or
                 (candidate.x < best_x + 1e-6 and candidate.y < best_y - 1e-6))

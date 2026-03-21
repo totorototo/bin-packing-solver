@@ -30,6 +30,7 @@ pub fn workerThread(ctx: *WorkerContext) !void {
     defer ga.deinit();
 
     ga.use_nfp = ctx.use_nfp;
+    ga.mutation_rate = ctx.mutation_rate;
     ga.initializePopulation();
     try ga.evaluateAll();
 
@@ -74,6 +75,12 @@ pub fn workerThread(ctx: *WorkerContext) !void {
                 ga.population[worst_idx] = try imported.clone();
 
                 if (ctx.verbose) std.debug.print("  [Core {d}] Gen {d}: Migration (imported {d:.2})\n", .{ ctx.core_id, gen, imported.fitness });
+
+                // Reset stagnation immediately if the imported solution beats our local best.
+                if (imported.fitness < last_best) {
+                    last_best = imported.fitness;
+                    stagnation_count = 0;
+                }
             }
         }
 
@@ -85,6 +92,13 @@ pub fn workerThread(ctx: *WorkerContext) !void {
             if (ctx.verbose) std.debug.print("  [Core {d}] Early stop at gen {d} (no improvement for {d} generations)\n", .{ ctx.core_id, gen + 1, ctx.stagnation_limit });
             break;
         }
+
+        if (ctx.timeout_end_ms) |deadline| {
+            if (std.time.milliTimestamp() >= deadline) {
+                if (ctx.verbose) std.debug.print("  [Core {d}] Timeout at gen {d}\n", .{ ctx.core_id, gen + 1 });
+                break;
+            }
+        }
     }
 
     var best_idx: usize = 0;
@@ -95,7 +109,7 @@ pub fn workerThread(ctx: *WorkerContext) !void {
     }
 
     ctx.best_result = try ga.population[best_idx].clone();
-    ctx.best_fitness = ctx.best_result.fitness;
+    ctx.best_fitness = ctx.best_result.?.fitness;
 
     if (ctx.verbose) std.debug.print("  [Core {d}] Finished! Best fitness: {d:.2}\n", .{ ctx.core_id, ctx.best_fitness });
 }

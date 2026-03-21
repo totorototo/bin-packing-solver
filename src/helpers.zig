@@ -3,41 +3,54 @@ const Vec2 = @import("vec2.zig").Vec2;
 const Polygon = @import("polygon.zig").Polygon;
 const PlacedItem = @import("placed_item.zig").PlacedItem;
 
-/// Jarvis march convex hull. Returns a newly allocated slice of hull vertices.
+/// Graham scan convex hull — O(n log n). Returns a newly allocated CCW slice of hull vertices.
 fn convexHull(allocator: std.mem.Allocator, points: []const Vec2) ![]Vec2 {
     if (points.len < 3) return allocator.dupe(Vec2, points);
 
-    // Find leftmost point as start
-    var start: usize = 0;
+    // Find pivot: bottommost (min y), then leftmost (min x).
+    var pivot_idx: usize = 0;
     for (points, 0..) |p, i| {
-        if (p.x < points[start].x or (p.x == points[start].x and p.y < points[start].y)) {
-            start = i;
+        if (p.y < points[pivot_idx].y or
+            (p.y == points[pivot_idx].y and p.x < points[pivot_idx].x))
+            pivot_idx = i;
+    }
+    const pivot = points[pivot_idx];
+
+    // Copy points and move pivot to index 0.
+    const sorted = try allocator.dupe(Vec2, points);
+    defer allocator.free(sorted);
+    sorted[pivot_idx] = sorted[0];
+    sorted[0] = pivot;
+
+    // Sort remaining points by CCW polar angle from pivot; closer first for ties.
+    std.mem.sort(Vec2, sorted[1..], pivot, struct {
+        fn lt(p: Vec2, a: Vec2, b: Vec2) bool {
+            const cross = (a.x - p.x) * (b.y - p.y) - (a.y - p.y) * (b.x - p.x);
+            if (cross > 1e-9) return true;
+            if (cross < -1e-9) return false;
+            const da = (a.x - p.x) * (a.x - p.x) + (a.y - p.y) * (a.y - p.y);
+            const db = (b.x - p.x) * (b.x - p.x) + (b.y - p.y) * (b.y - p.y);
+            return da < db;
         }
+    }.lt);
+
+    // Graham scan: build CCW hull, popping collinear or right-turning vertices.
+    const hull = try allocator.alloc(Vec2, points.len);
+    var h: usize = 0;
+    for (sorted) |p| {
+        while (h >= 2) {
+            const cross = (hull[h - 1].x - hull[h - 2].x) * (p.y - hull[h - 2].y) -
+                (hull[h - 1].y - hull[h - 2].y) * (p.x - hull[h - 2].x);
+            if (cross > 1e-9) break; // strictly left turn — keep
+            h -= 1;
+        }
+        hull[h] = p;
+        h += 1;
     }
 
-    const buf = try allocator.alloc(Vec2, points.len);
-    var hull_len: usize = 0;
-
-    var current = start;
-    while (true) {
-        buf[hull_len] = points[current];
-        hull_len += 1;
-        var next: usize = if (current == 0) 1 else 0;
-        for (points, 0..) |_, i| {
-            if (i == current) continue;
-            const a = points[current];
-            const b = points[next];
-            const c = points[i];
-            const cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-            if (cross < 0) next = i;
-        }
-        current = next;
-        if (current == start or hull_len >= points.len) break;
-    }
-
-    const result = try allocator.alloc(Vec2, hull_len);
-    @memcpy(result, buf[0..hull_len]);
-    allocator.free(buf);
+    const result = try allocator.alloc(Vec2, h);
+    @memcpy(result, hull[0..h]);
+    allocator.free(hull);
     return result;
 }
 
@@ -115,7 +128,7 @@ pub fn exportToSVG(items: []const PlacedItem, width: f32, height: f32, filename:
     , .{ width, height, efficiency });
 
     for (items) |item| {
-        const hue = (@as(u32, @intFromFloat(@as(f32, @floatFromInt(item.piece_id)) * 137.508)) % 360);
+        const hue = (@as(u32, @truncate(item.piece_id)) *% 137) % 360;
         const r = @as(u8, @intFromFloat(127 + 127 * @cos(@as(f32, @floatFromInt(hue)) * 0.017453)));
         const g = @as(u8, @intFromFloat(127 + 127 * @cos((@as(f32, @floatFromInt(hue)) + 120) * 0.017453)));
         const b = @as(u8, @intFromFloat(127 + 127 * @cos((@as(f32, @floatFromInt(hue)) + 240) * 0.017453)));

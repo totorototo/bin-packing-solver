@@ -21,9 +21,17 @@ pub const NestingConfig = struct {
     migration_interval: usize = 10,
     /// Stop early if best fitness does not improve for this many generations. 0 = disabled.
     stagnation_limit: usize = 20,
+    /// Wall-clock budget in milliseconds. All threads stop after this many ms. Null = no limit.
+    timeout_ms: ?u64 = null,
     grid_resolution: f32 = 5.0,
     verbose: bool = false,
     piece_constraints: ?[]const PieceConstraints = null,
+    /// Fraction of population preserved as elite each generation (default 30%).
+    elite_fraction: f32 = 0.3,
+    /// Fraction of population replaced by random mutants each generation (default 20%).
+    mutant_fraction: f32 = 0.2,
+    /// Per-gene mutation probability applied during crossover (default 5%).
+    mutation_rate: f32 = 0.05,
 };
 
 pub const NestingError = error{
@@ -49,15 +57,15 @@ pub fn performNesting(
         if (!p.isConvex()) use_nfp = true;
     }
 
-    const elite_size: usize = @intFromFloat(@as(f32, @floatFromInt(config.population_per_core)) * 0.3);
-    const mutant_size: usize = @intFromFloat(@as(f32, @floatFromInt(config.population_per_core)) * 0.2);
+    const elite_size: usize = @intFromFloat(@as(f32, @floatFromInt(config.population_per_core)) * config.elite_fraction);
+    const mutant_size: usize = @intFromFloat(@as(f32, @floatFromInt(config.population_per_core)) * config.mutant_fraction);
 
     if (config.verbose) {
         std.debug.print("\nMulti-core GA Parameters:\n", .{});
         std.debug.print("   Cores: {d}\n", .{config.num_cores});
         std.debug.print("   Population per core: {d}\n", .{config.population_per_core});
         std.debug.print("   Total population: {d}\n", .{config.population_per_core * config.num_cores});
-        std.debug.print("   Elite: {d} (30%), Mutants: {d} (20%)\n", .{ elite_size, mutant_size });
+        std.debug.print("   Elite: {d} ({d:.0}%), Mutants: {d} ({d:.0}%)\n", .{ elite_size, config.elite_fraction * 100, mutant_size, config.mutant_fraction * 100 });
         std.debug.print("   Generations: {d} (max)\n", .{config.generations});
         std.debug.print("   Migration interval: every {d} generations\n", .{config.migration_interval});
         std.debug.print("   Grid resolution: {d:.1}\n", .{config.grid_resolution});
@@ -71,6 +79,10 @@ pub fn performNesting(
     defer allocator.free(contexts);
 
     const seed = @as(u64, @intCast(std.time.timestamp()));
+    const timeout_end_ms: ?i64 = if (config.timeout_ms) |ms|
+        std.time.milliTimestamp() + @as(i64, @intCast(ms))
+    else
+        null;
 
     for (contexts, 0..) |*ctx, i| {
         ctx.* = .{
@@ -90,6 +102,8 @@ pub fn performNesting(
             .seed = seed,
             .verbose = config.verbose,
             .use_nfp = use_nfp,
+            .mutation_rate = config.mutation_rate,
+            .timeout_end_ms = timeout_end_ms,
         };
     }
 
@@ -125,7 +139,7 @@ pub fn performNesting(
         std.debug.print("\nCreating final packing from best solution...\n", .{});
     }
 
-    const best_chromo = contexts[global_best_idx].best_result;
+    const best_chromo = contexts[global_best_idx].best_result.?;
 
     var final_packer = Packer.init(allocator, config.strip_width, config.grid_resolution);
     final_packer.use_nfp = use_nfp;
@@ -179,7 +193,7 @@ pub fn performNesting(
     }
 
     for (contexts) |*ctx| {
-        ctx.best_result.deinit();
+        if (ctx.best_result) |*r| r.deinit();
     }
 
     return NestingResult{

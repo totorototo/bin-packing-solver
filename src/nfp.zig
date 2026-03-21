@@ -108,14 +108,14 @@ pub fn computeNFP(allocator: std.mem.Allocator, polyA: Polygon, polyB: Polygon) 
             i += 1;
         } else {
             const cross = ea[i].x * eb[j].y - ea[i].y * eb[j].x;
-            if (cross > 0) {
+            if (cross > 1e-9) {
                 current = current.add(ea[i]);
                 i += 1;
-            } else if (cross < 0) {
+            } else if (cross < -1e-9) {
                 current = current.add(eb[j]);
                 j += 1;
             } else {
-                // Parallel edges: combine into one step, no intermediate vertex.
+                // Parallel edges (|cross| ≤ 1e-9): combine into one step, no intermediate vertex.
                 current = current.add(ea[i]).add(eb[j]);
                 i += 1;
                 j += 1;

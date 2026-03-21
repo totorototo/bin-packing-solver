@@ -19,6 +19,8 @@ pub const GeneticAlgorithm = struct {
     piece_constraints: ?[]const PieceConstraints = null,
     /// When true, use NFP-based collision detection (required for non-convex pieces).
     use_nfp: bool = false,
+    /// Per-gene mutation probability applied during crossover.
+    mutation_rate: f32 = 0.05,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -177,7 +179,7 @@ pub const GeneticAlgorithm = struct {
             const parent2 = self.population[rest_idx];
 
             var child = try self.crossover(parent1, parent2);
-            self.mutate(&child, 0.05);
+            self.mutate(&child, self.mutation_rate);
             new_population[i] = child;
         }
 
