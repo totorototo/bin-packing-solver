@@ -12,6 +12,7 @@ pub const GeneticAlgorithm = struct {
     pieces: []Polygon,
     rotation_angles: []const f32,
     strip_height: f32,
+    grid_resolution: f32,
     allocator: std.mem.Allocator,
     random: std.Random,
     /// Optional per-piece constraints for grain line support
@@ -21,6 +22,7 @@ pub const GeneticAlgorithm = struct {
         allocator: std.mem.Allocator,
         pieces: []Polygon,
         strip_height: f32,
+        grid_resolution: f32,
         pop_size: usize,
         elite_sz: usize,
         mutant_sz: usize,
@@ -41,6 +43,7 @@ pub const GeneticAlgorithm = struct {
             .pieces = pieces,
             .rotation_angles = &[_]f32{ 0, 45, 90, 135, 180, 225, 270, 315 },
             .strip_height = strip_height,
+            .grid_resolution = grid_resolution,
             .allocator = allocator,
             .random = rand,
             .piece_constraints = piece_constraints,
@@ -61,21 +64,23 @@ pub const GeneticAlgorithm = struct {
     }
 
     pub fn evaluateFitness(self: *GeneticAlgorithm, chromo: *Chromosome) !void {
-        var packer = Packer.init(self.allocator, self.strip_height);
+        var packer = Packer.init(self.allocator, self.strip_height, self.grid_resolution);
         defer packer.deinit();
 
-        for (chromo.sequence, 0..) |piece_idx, i| {
+        for (chromo.sequence) |piece_idx| {
             const orig_poly = self.pieces[piece_idx];
             var rotated = try orig_poly.rotateByAngle(self.allocator, chromo.rotations[piece_idx]);
             defer rotated.deinit(self.allocator);
 
-            if (try packer.placePolygon(rotated, piece_idx)) |placement| {
+            if (try packer.placePolygon(rotated, piece_idx, chromo.rotations[piece_idx])) |placement| {
                 try packer.placed_items.append(self.allocator, placement);
             } else {
-                chromo.fitness = 10000.0 + @as(f32, @floatFromInt(i));
+                chromo.placement_failed = true;
+                chromo.fitness = std.math.floatMax(f32);
                 return;
             }
         }
+        chromo.placement_failed = false;
         chromo.fitness = packer.getMaxWidth();
     }
 

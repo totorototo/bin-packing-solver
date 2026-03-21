@@ -7,13 +7,14 @@ const isOverlappingSAT = @import("sat.zig").isOverlappingSAT;
 pub const Packer = struct {
     strip_height: f32,
     placed_items: std.ArrayList(PlacedItem),
-    grid_resolution: f32 = 5.0,
+    grid_resolution: f32,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, height: f32) Packer {
+    pub fn init(allocator: std.mem.Allocator, height: f32, grid_resolution: f32) Packer {
         return .{
             .allocator = allocator,
             .strip_height = height,
+            .grid_resolution = grid_resolution,
             .placed_items = .{},
         };
     }
@@ -25,11 +26,18 @@ pub const Packer = struct {
         self.placed_items.deinit(self.allocator);
     }
 
+    fn aabbOverlap(aPos: Vec2, aW: f32, aH: f32, bPos: Vec2, bW: f32, bH: f32) bool {
+        if (aPos.x + aW <= bPos.x or bPos.x + bW <= aPos.x) return false;
+        if (aPos.y + aH <= bPos.y or bPos.y + bH <= aPos.y) return false;
+        return true;
+    }
+
     fn checkOverlap(self: *Packer, poly: Polygon, test_pos: Vec2) bool {
         if (test_pos.x < 0 or test_pos.y < 0) return true;
         if (test_pos.y + poly.height > self.strip_height) return true;
 
         for (self.placed_items.items) |item| {
+            if (!aabbOverlap(test_pos, poly.width, poly.height, item.pos, item.poly.width, item.poly.height)) continue;
             if (isOverlappingSAT(poly, test_pos, item.poly, item.pos)) {
                 return true;
             }
@@ -37,7 +45,7 @@ pub const Packer = struct {
         return false;
     }
 
-    pub fn placePolygon(self: *Packer, poly: Polygon, piece_id: usize) !?PlacedItem {
+    pub fn placePolygon(self: *Packer, poly: Polygon, piece_id: usize, rotation: f32) !?PlacedItem {
         const max_search_width = self.getMaxWidth() + poly.width + 50.0;
         var best_pos: ?Vec2 = null;
         var best_x: f32 = std.math.floatMax(f32);
@@ -65,7 +73,7 @@ pub const Packer = struct {
             return PlacedItem{
                 .poly = placed_poly,
                 .pos = pos,
-                .rotation = 0,
+                .rotation = rotation,
                 .piece_id = piece_id,
             };
         }
@@ -91,3 +99,76 @@ pub const Packer = struct {
         return (total_area / used_area) * 100.0;
     }
 };
+
+test "Packer places a single square" {
+    const allocator = std.testing.allocator;
+    var packer = Packer.init(allocator, 10.0, 1.0);
+    defer packer.deinit();
+
+    const verts = try allocator.alloc(Vec2, 4);
+    verts[0] = Vec2.init(0, 0);
+    verts[1] = Vec2.init(3, 0);
+    verts[2] = Vec2.init(3, 3);
+    verts[3] = Vec2.init(0, 3);
+    var poly = Polygon{ .vertices = verts };
+    poly.initBoundingBox();
+    defer poly.deinit(allocator);
+
+    var result = try packer.placePolygon(poly, 0, 0);
+    try std.testing.expect(result != null);
+    try std.testing.expectEqual(@as(f32, 0), result.?.rotation);
+    result.?.poly.deinit(allocator);
+}
+
+test "Packer rejects piece taller than strip" {
+    const allocator = std.testing.allocator;
+    var packer = Packer.init(allocator, 5.0, 1.0);
+    defer packer.deinit();
+
+    const verts = try allocator.alloc(Vec2, 4);
+    verts[0] = Vec2.init(0, 0);
+    verts[1] = Vec2.init(2, 0);
+    verts[2] = Vec2.init(2, 6);
+    verts[3] = Vec2.init(0, 6);
+    var poly = Polygon{ .vertices = verts };
+    poly.initBoundingBox();
+
+    const result = try packer.placePolygon(poly, 0, 0);
+    try std.testing.expect(result == null);
+    poly.deinit(allocator);
+}
+
+test "Packer places two squares side by side" {
+    const allocator = std.testing.allocator;
+    // Strip height exactly equals piece height, forcing horizontal placement
+    var packer = Packer.init(allocator, 4.0, 1.0);
+    defer packer.deinit();
+
+    const makeSquare = struct {
+        fn f(alloc: std.mem.Allocator, size: f32) !Polygon {
+            const v = try alloc.alloc(Vec2, 4);
+            v[0] = Vec2.init(0, 0);
+            v[1] = Vec2.init(size, 0);
+            v[2] = Vec2.init(size, size);
+            v[3] = Vec2.init(0, size);
+            var p = Polygon{ .vertices = v };
+            p.initBoundingBox();
+            return p;
+        }
+    }.f;
+
+    var a = try makeSquare(allocator, 4.0);
+    var b = try makeSquare(allocator, 4.0);
+    defer a.deinit(allocator);
+    defer b.deinit(allocator);
+
+    const r1 = try packer.placePolygon(a, 0, 0);
+    try std.testing.expect(r1 != null);
+    try packer.placed_items.append(allocator, r1.?);
+
+    var r2 = try packer.placePolygon(b, 1, 0);
+    try std.testing.expect(r2 != null);
+    // Second square must be placed to the right of the first
+    try std.testing.expect(r2.?.pos.x >= 4.0);
+    r2.?.poly.deinit(allocator);
+}

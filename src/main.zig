@@ -23,28 +23,20 @@ pub fn main() !void {
         try pieces.append(allocator, try bps.generateRandomConvex(allocator, random, size));
     }
 
-    // Perform nesting using the exported function from root.zig
-    const strip_height: f32 = 50.0;
-    const num_cores: usize = 4;
-    const population_per_core: usize = 20;
-    const generations: usize = 100;
-    const migration_interval: usize = 10;
-
-    var result = try bps.performNesting(
-        allocator,
-        pieces.items,
-        strip_height,
-        num_cores,
-        population_per_core,
-        generations,
-        migration_interval,
-    );
+    var result = try bps.performNesting(allocator, pieces.items, .{
+        .strip_height = 50.0,
+        .num_cores = 4,
+        .population_per_core = 20,
+        .generations = 100,
+        .migration_interval = 10,
+        .verbose = true,
+    });
     defer result.deinit();
 
     // Export result to SVG
     std.debug.print("\n📁 Exporting result to SVG...\n", .{});
     var filename_buf: [128]u8 = undefined;
     const filename = try std.fmt.bufPrint(&filename_buf, "nesting_{d}.svg", .{std.time.timestamp()});
-    try bps.exportToSVG(result.placed_items.items, result.final_width, strip_height, filename, result.efficiency);
+    try bps.exportToSVG(result.placed_items.items, result.final_width, 50.0, filename, result.efficiency);
     std.debug.print("   Saved to: {s}\n", .{filename});
 }

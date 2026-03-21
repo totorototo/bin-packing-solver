@@ -5,6 +5,8 @@ pub const Chromosome = struct {
     sequence: []usize,
     rotations: []f32,
     fitness: f32 = std.math.floatMax(f32),
+    /// True when at least one piece could not be placed during evaluation.
+    placement_failed: bool = false,
     allocator: std.mem.Allocator,
     /// Optional per-piece constraints (shared reference, not owned)
     piece_constraints: ?[]const PieceConstraints = null,
@@ -48,6 +50,7 @@ pub const Chromosome = struct {
             .sequence = new_seq,
             .rotations = new_rots,
             .fitness = self.fitness,
+            .placement_failed = self.placement_failed,
             .allocator = self.allocator,
             .piece_constraints = self.piece_constraints,
         };

@@ -2,16 +2,25 @@ const std = @import("std");
 const GeneticAlgorithm = @import("genetic_algorithm.zig").GeneticAlgorithm;
 const WorkerContext = @import("worker_context.zig").WorkerContext;
 
+/// SplitMix64 hash to derive an independent seed per core.
+fn deriveSeed(base: u64, core_id: usize) u64 {
+    var s = base +% @as(u64, @intCast(core_id)) *% 0x9e3779b97f4a7c15;
+    s = (s ^ (s >> 30)) *% 0xbf58476d1ce4e5b9;
+    s = (s ^ (s >> 27)) *% 0x94d049bb133111eb;
+    return s ^ (s >> 31);
+}
+
 pub fn workerThread(ctx: *WorkerContext) !void {
-    var prng = std.Random.DefaultPrng.init(ctx.seed + ctx.core_id * 1000);
+    var prng = std.Random.DefaultPrng.init(deriveSeed(ctx.seed, ctx.core_id));
     const random = prng.random();
 
-    std.debug.print("  [Core {d}] Starting evolution...\n", .{ctx.core_id});
+    if (ctx.verbose) std.debug.print("  [Core {d}] Starting evolution...\n", .{ctx.core_id});
 
     var ga = try GeneticAlgorithm.init(
         ctx.allocator,
         ctx.pieces,
         ctx.strip_height,
+        ctx.grid_resolution,
         ctx.population_size,
         ctx.elite_size,
         ctx.mutant_size,
@@ -22,6 +31,9 @@ pub fn workerThread(ctx: *WorkerContext) !void {
 
     ga.initializePopulation();
     try ga.evaluateAll();
+
+    var stagnation_count: usize = 0;
+    var last_best: f32 = std.math.floatMax(f32);
 
     for (0..ctx.generations) |gen| {
         try ga.evolveOneGeneration();
@@ -34,6 +46,14 @@ pub fn workerThread(ctx: *WorkerContext) !void {
         }
 
         const current_best = ga.population[best_idx].fitness;
+
+        // Stagnation tracking
+        if (current_best < last_best) {
+            last_best = current_best;
+            stagnation_count = 0;
+        } else {
+            stagnation_count += 1;
+        }
 
         // Migration
         if (gen % ctx.migration_interval == 0 and gen > 0) {
@@ -52,12 +72,17 @@ pub fn workerThread(ctx: *WorkerContext) !void {
                 ga.population[worst_idx].deinit();
                 ga.population[worst_idx] = try imported.clone();
 
-                std.debug.print("  [Core {d}] Gen {d}: Migration (imported {d:.2})\n", .{ ctx.core_id, gen, imported.fitness });
+                if (ctx.verbose) std.debug.print("  [Core {d}] Gen {d}: Migration (imported {d:.2})\n", .{ ctx.core_id, gen, imported.fitness });
             }
         }
 
-        if ((gen + 1) % 20 == 0) {
+        if (ctx.verbose and (gen + 1) % 20 == 0) {
             std.debug.print("  [Core {d}] Gen {d}/{d}: Best = {d:.2}\n", .{ ctx.core_id, gen + 1, ctx.generations, current_best });
+        }
+
+        if (ctx.stagnation_limit > 0 and stagnation_count >= ctx.stagnation_limit) {
+            if (ctx.verbose) std.debug.print("  [Core {d}] Early stop at gen {d} (no improvement for {d} generations)\n", .{ ctx.core_id, gen + 1, ctx.stagnation_limit });
+            break;
         }
     }
 
@@ -71,5 +96,5 @@ pub fn workerThread(ctx: *WorkerContext) !void {
     ctx.best_result = try ga.population[best_idx].clone();
     ctx.best_fitness = ctx.best_result.fitness;
 
-    std.debug.print("  [Core {d}] Finished! Best fitness: {d:.2}\n", .{ ctx.core_id, ctx.best_fitness });
+    if (ctx.verbose) std.debug.print("  [Core {d}] Finished! Best fitness: {d:.2}\n", .{ ctx.core_id, ctx.best_fitness });
 }

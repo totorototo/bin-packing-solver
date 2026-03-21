@@ -15,8 +15,11 @@ pub const WorkerContext = struct {
     generations: usize,
     migration_pool: *MigrationPool,
     migration_interval: usize,
+    grid_resolution: f32,
+    stagnation_limit: usize,
     allocator: std.mem.Allocator,
     seed: u64,
+    verbose: bool = false,
 
     best_result: Chromosome = undefined,
     best_fitness: f32 = std.math.floatMax(f32),

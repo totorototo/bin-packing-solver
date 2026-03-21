@@ -3,8 +3,46 @@ const Vec2 = @import("vec2.zig").Vec2;
 const Polygon = @import("polygon.zig").Polygon;
 const PlacedItem = @import("placed_item.zig").PlacedItem;
 
+/// Jarvis march convex hull. Returns a newly allocated slice of hull vertices.
+fn convexHull(allocator: std.mem.Allocator, points: []const Vec2) ![]Vec2 {
+    if (points.len < 3) return allocator.dupe(Vec2, points);
+
+    // Find leftmost point as start
+    var start: usize = 0;
+    for (points, 0..) |p, i| {
+        if (p.x < points[start].x or (p.x == points[start].x and p.y < points[start].y)) {
+            start = i;
+        }
+    }
+
+    const buf = try allocator.alloc(Vec2, points.len);
+    var hull_len: usize = 0;
+
+    var current = start;
+    while (true) {
+        buf[hull_len] = points[current];
+        hull_len += 1;
+        var next: usize = if (current == 0) 1 else 0;
+        for (points, 0..) |_, i| {
+            if (i == current) continue;
+            const a = points[current];
+            const b = points[next];
+            const c = points[i];
+            const cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+            if (cross < 0) next = i;
+        }
+        current = next;
+        if (current == start or hull_len >= points.len) break;
+    }
+
+    const result = try allocator.alloc(Vec2, hull_len);
+    @memcpy(result, buf[0..hull_len]);
+    allocator.free(buf);
+    return result;
+}
+
 pub fn generateRandomConvex(allocator: std.mem.Allocator, rand: std.Random, size: f32) !Polygon {
-    const num_points = rand.intRangeAtMost(usize, 4, 18);
+    const num_points = rand.intRangeAtMost(usize, 6, 18);
     var angles = try allocator.alloc(f32, num_points);
     defer allocator.free(angles);
 
@@ -13,14 +51,16 @@ pub fn generateRandomConvex(allocator: std.mem.Allocator, rand: std.Random, size
     }
     std.mem.sort(f32, angles, {}, std.sort.asc(f32));
 
-    var verts = try allocator.alloc(Vec2, num_points);
+    var raw_verts = try allocator.alloc(Vec2, num_points);
+    defer allocator.free(raw_verts);
     for (0..num_points) |i| {
         const r = size * (0.5 + rand.float(f32) * 0.5);
-        verts[i] = Vec2.init(@cos(angles[i]) * r, @sin(angles[i]) * r);
+        raw_verts[i] = Vec2.init(@cos(angles[i]) * r, @sin(angles[i]) * r);
     }
 
-    var p = Polygon{ .vertices = verts };
-    p.normalizeToPositive(); // Normalize coordinates to be positive
+    const hull_verts = try convexHull(allocator, raw_verts);
+    var p = Polygon{ .vertices = hull_verts };
+    p.normalizeToPositive();
     p.initBoundingBox();
     return p;
 }

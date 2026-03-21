@@ -41,13 +41,28 @@ pub const Polygon = struct {
 
     pub fn calculateCentroid(self: Polygon) Vec2 {
         if (self.vertices.len == 0) return Vec2.init(0, 0);
+        const area = self.calculateArea();
+        if (area < 0.0001) {
+            // Degenerate polygon: fall back to vertex average
+            var cx: f32 = 0;
+            var cy: f32 = 0;
+            for (self.vertices) |v| {
+                cx += v.x;
+                cy += v.y;
+            }
+            const n = @as(f32, @floatFromInt(self.vertices.len));
+            return Vec2.init(cx / n, cy / n);
+        }
         var cx: f32 = 0;
         var cy: f32 = 0;
-        for (self.vertices) |v| {
-            cx += v.x;
-            cy += v.y;
+        for (0..self.vertices.len) |i| {
+            const j = (i + 1) % self.vertices.len;
+            const cross = self.vertices[i].x * self.vertices[j].y - self.vertices[j].x * self.vertices[i].y;
+            cx += (self.vertices[i].x + self.vertices[j].x) * cross;
+            cy += (self.vertices[i].y + self.vertices[j].y) * cross;
         }
-        return Vec2.init(cx / @as(f32, @floatFromInt(self.vertices.len)), cy / @as(f32, @floatFromInt(self.vertices.len)));
+        const factor = 1.0 / (6.0 * area);
+        return Vec2.init(@abs(cx * factor), @abs(cy * factor));
     }
 
     /// Translate polygon so all coordinates start exactly at (0, 0)
@@ -100,7 +115,95 @@ pub const Polygon = struct {
         };
     }
 
+    /// Returns true if the polygon is convex (all cross products have the same sign).
+    pub fn isConvex(self: Polygon) bool {
+        if (self.vertices.len < 3) return false;
+        var sign: i32 = 0;
+        for (0..self.vertices.len) |i| {
+            const a = self.vertices[i];
+            const b = self.vertices[(i + 1) % self.vertices.len];
+            const c = self.vertices[(i + 2) % self.vertices.len];
+            const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+            if (cross > 0.0001) {
+                if (sign == -1) return false;
+                sign = 1;
+            } else if (cross < -0.0001) {
+                if (sign == 1) return false;
+                sign = -1;
+            }
+        }
+        return true;
+    }
+
     pub fn deinit(self: *Polygon, allocator: std.mem.Allocator) void {
         allocator.free(self.vertices);
     }
 };
+
+test "Polygon area - unit square" {
+    const allocator = std.testing.allocator;
+    const verts = try allocator.alloc(Vec2, 4);
+    verts[0] = Vec2.init(0, 0);
+    verts[1] = Vec2.init(1, 0);
+    verts[2] = Vec2.init(1, 1);
+    verts[3] = Vec2.init(0, 1);
+    var p = Polygon{ .vertices = verts };
+    defer p.deinit(allocator);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), p.calculateArea(), 0.001);
+}
+
+test "Polygon centroid - unit square" {
+    const allocator = std.testing.allocator;
+    const verts = try allocator.alloc(Vec2, 4);
+    verts[0] = Vec2.init(0, 0);
+    verts[1] = Vec2.init(2, 0);
+    verts[2] = Vec2.init(2, 2);
+    verts[3] = Vec2.init(0, 2);
+    var p = Polygon{ .vertices = verts };
+    defer p.deinit(allocator);
+    const c = p.calculateCentroid();
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), c.x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), c.y, 0.001);
+}
+
+test "Polygon isConvex - square is convex" {
+    const allocator = std.testing.allocator;
+    const verts = try allocator.alloc(Vec2, 4);
+    verts[0] = Vec2.init(0, 0);
+    verts[1] = Vec2.init(1, 0);
+    verts[2] = Vec2.init(1, 1);
+    verts[3] = Vec2.init(0, 1);
+    var p = Polygon{ .vertices = verts };
+    defer p.deinit(allocator);
+    try std.testing.expect(p.isConvex());
+}
+
+test "Polygon isConvex - L-shape is not convex" {
+    const allocator = std.testing.allocator;
+    const verts = try allocator.alloc(Vec2, 6);
+    verts[0] = Vec2.init(0, 0);
+    verts[1] = Vec2.init(2, 0);
+    verts[2] = Vec2.init(2, 1);
+    verts[3] = Vec2.init(1, 1);
+    verts[4] = Vec2.init(1, 2);
+    verts[5] = Vec2.init(0, 2);
+    var p = Polygon{ .vertices = verts };
+    defer p.deinit(allocator);
+    try std.testing.expect(!p.isConvex());
+}
+
+test "Polygon rotation preserves area" {
+    const allocator = std.testing.allocator;
+    const verts = try allocator.alloc(Vec2, 4);
+    verts[0] = Vec2.init(0, 0);
+    verts[1] = Vec2.init(3, 0);
+    verts[2] = Vec2.init(3, 2);
+    verts[3] = Vec2.init(0, 2);
+    var p = Polygon{ .vertices = verts };
+    p.initBoundingBox();
+    defer p.deinit(allocator);
+    const original_area = p.calculateArea();
+    var rotated = try p.rotateByAngle(allocator, 90);
+    defer rotated.deinit(allocator);
+    try std.testing.expectApproxEqAbs(original_area, rotated.calculateArea(), 0.01);
+}

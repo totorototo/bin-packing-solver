@@ -19,8 +19,11 @@ pub const NestingResult = nesting_result.NestingResult;
 pub const PieceConstraints = piece_constraints.PieceConstraints;
 pub const RotationConstraints = rotation_constraints.RotationConstraints;
 
+// Public API - Types
+pub const NestingConfig = nesting.NestingConfig;
+pub const NestingError = nesting.NestingError;
+
 // Public API - Functions
 pub const performNesting = nesting.performNesting;
-pub const performNestingWithConstraints = nesting.performNestingWithConstraints;
 pub const generateRandomConvex = helpers.generateRandomConvex;
 pub const exportToSVG = helpers.exportToSVG;
