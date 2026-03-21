@@ -1,5 +1,7 @@
 # Bin Packing Solver
 
+[![CI](https://github.com/totorototo/bin-packing-solver/actions/workflows/ci.yml/badge.svg)](https://github.com/totorototo/bin-packing-solver/actions/workflows/ci.yml)
+
 A high-performance 2D bin packing / nesting library written in Zig, using a multi-core genetic algorithm for optimal polygon placement.
 
 ## Features
