@@ -100,6 +100,64 @@ pub const Packer = struct {
     }
 };
 
+test "Packer getLength - empty packer returns zero" {
+    const allocator = std.testing.allocator;
+    var packer = Packer.init(allocator, 10.0, 1.0);
+    defer packer.deinit();
+    try std.testing.expectApproxEqAbs(@as(f32, 0), packer.getLength(), 0.001);
+}
+
+test "Packer calculateEfficiency - empty packer returns zero" {
+    const allocator = std.testing.allocator;
+    var packer = Packer.init(allocator, 10.0, 1.0);
+    defer packer.deinit();
+    try std.testing.expectApproxEqAbs(@as(f32, 0), packer.calculateEfficiency(), 0.001);
+}
+
+test "Packer calculateEfficiency - square filling strip exactly is 100%" {
+    const allocator = std.testing.allocator;
+    // strip_width = 4, place a 4x4 square → area = 16, used_area = 4*4 = 16
+    var packer = Packer.init(allocator, 4.0, 1.0);
+    defer packer.deinit();
+
+    const verts = try allocator.alloc(Vec2, 4);
+    verts[0] = Vec2.init(0, 0);
+    verts[1] = Vec2.init(4, 0);
+    verts[2] = Vec2.init(4, 4);
+    verts[3] = Vec2.init(0, 4);
+    var poly = Polygon{ .vertices = verts };
+    poly.initBoundingBox();
+    defer poly.deinit(allocator);
+
+    const placement = try packer.placePolygon(poly, 0, 0);
+    try std.testing.expect(placement != null);
+    try packer.placed_items.append(allocator, placement.?);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 100.0), packer.calculateEfficiency(), 0.1);
+}
+
+test "Packer calculateEfficiency - partial fill is less than 100%" {
+    const allocator = std.testing.allocator;
+    // strip_width = 10, place a 2x2 square → area = 4, used_area = 10*2 = 20 → 20%
+    var packer = Packer.init(allocator, 10.0, 1.0);
+    defer packer.deinit();
+
+    const verts = try allocator.alloc(Vec2, 4);
+    verts[0] = Vec2.init(0, 0);
+    verts[1] = Vec2.init(2, 0);
+    verts[2] = Vec2.init(2, 2);
+    verts[3] = Vec2.init(0, 2);
+    var poly = Polygon{ .vertices = verts };
+    poly.initBoundingBox();
+    defer poly.deinit(allocator);
+
+    const placement = try packer.placePolygon(poly, 0, 0);
+    try std.testing.expect(placement != null);
+    try packer.placed_items.append(allocator, placement.?);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 20.0), packer.calculateEfficiency(), 0.1);
+}
+
 test "Packer places a single square" {
     const allocator = std.testing.allocator;
     var packer = Packer.init(allocator, 10.0, 1.0);

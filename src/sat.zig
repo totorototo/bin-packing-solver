@@ -69,3 +69,71 @@ test "SAT - touching edges are considered overlapping" {
     // SAT uses strict < so touching projections (max == min) are not separating axes
     try std.testing.expect(isOverlappingSAT(a, Vec2.init(0, 0), b, Vec2.init(2, 0)));
 }
+
+fn makeTriangle(allocator: std.mem.Allocator, x: f32, y: f32, size: f32) !Polygon {
+    // Right triangle: (x,y), (x+size,y), (x,y+size)
+    const verts = try allocator.alloc(Vec2, 3);
+    verts[0] = Vec2.init(x, y);
+    verts[1] = Vec2.init(x + size, y);
+    verts[2] = Vec2.init(x, y + size);
+    var p = Polygon{ .vertices = verts };
+    p.initBoundingBox();
+    return p;
+}
+
+test "SAT - overlapping triangles" {
+    const allocator = std.testing.allocator;
+    var a = try makeTriangle(allocator, 0, 0, 4);
+    defer a.deinit(allocator);
+    var b = try makeTriangle(allocator, 0, 0, 4);
+    defer b.deinit(allocator);
+    try std.testing.expect(isOverlappingSAT(a, Vec2.init(0, 0), b, Vec2.init(1, 0)));
+}
+
+test "SAT - separated triangles do not overlap" {
+    const allocator = std.testing.allocator;
+    var a = try makeTriangle(allocator, 0, 0, 2);
+    defer a.deinit(allocator);
+    var b = try makeTriangle(allocator, 0, 0, 2);
+    defer b.deinit(allocator);
+    // Place b well to the right so there's a clear gap
+    try std.testing.expect(!isOverlappingSAT(a, Vec2.init(0, 0), b, Vec2.init(5, 0)));
+}
+
+test "SAT - triangle and square overlapping" {
+    const allocator = std.testing.allocator;
+    var tri = try makeTriangle(allocator, 0, 0, 3);
+    defer tri.deinit(allocator);
+    var sq = try makeSquare(allocator, 0, 0, 3);
+    defer sq.deinit(allocator);
+    try std.testing.expect(isOverlappingSAT(tri, Vec2.init(0, 0), sq, Vec2.init(1, 0)));
+}
+
+test "SAT - triangle and square separated" {
+    const allocator = std.testing.allocator;
+    var tri = try makeTriangle(allocator, 0, 0, 2);
+    defer tri.deinit(allocator);
+    var sq = try makeSquare(allocator, 0, 0, 2);
+    defer sq.deinit(allocator);
+    try std.testing.expect(!isOverlappingSAT(tri, Vec2.init(0, 0), sq, Vec2.init(10, 0)));
+}
+
+test "SAT getProjection - axis-aligned square projects correctly" {
+    const allocator = std.testing.allocator;
+    var sq = try makeSquare(allocator, 0, 0, 2);
+    defer sq.deinit(allocator);
+    const x_axis = Vec2.init(1, 0);
+    const proj = getProjection(sq, Vec2.init(0, 0), x_axis);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), proj.min, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), proj.max, 0.001);
+}
+
+test "SAT getProjection - offset position shifts projection" {
+    const allocator = std.testing.allocator;
+    var sq = try makeSquare(allocator, 0, 0, 2);
+    defer sq.deinit(allocator);
+    const x_axis = Vec2.init(1, 0);
+    const proj = getProjection(sq, Vec2.init(3, 0), x_axis);
+    try std.testing.expectApproxEqAbs(@as(f32, 3), proj.min, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 5), proj.max, 0.001);
+}

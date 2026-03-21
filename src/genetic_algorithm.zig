@@ -187,3 +187,154 @@ pub const GeneticAlgorithm = struct {
         try self.evaluateAll();
     }
 };
+
+fn makeTestSquare(allocator: std.mem.Allocator, size: f32) !Polygon {
+    const Vec2 = @import("vec2.zig").Vec2;
+    const v = try allocator.alloc(Vec2, 4);
+    v[0] = .{ .x = 0, .y = 0 };
+    v[1] = .{ .x = size, .y = 0 };
+    v[2] = .{ .x = size, .y = size };
+    v[3] = .{ .x = 0, .y = size };
+    var p = Polygon{ .vertices = v };
+    p.initBoundingBox();
+    return p;
+}
+
+test "GeneticAlgorithm init - population size and chromosome length" {
+    const allocator = std.testing.allocator;
+    var sq = try makeTestSquare(allocator, 3);
+    defer sq.deinit(allocator);
+    var pieces = [_]Polygon{sq};
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var ga = try GeneticAlgorithm.init(allocator, &pieces, 10.0, 1.0, 8, 2, 2, prng.random(), null);
+    defer ga.deinit();
+
+    try std.testing.expectEqual(@as(usize, 8), ga.population.len);
+    for (ga.population) |chromo| {
+        try std.testing.expectEqual(@as(usize, 1), chromo.sequence.len);
+    }
+}
+
+test "GeneticAlgorithm initializePopulation - chromosomes are valid permutations" {
+    const allocator = std.testing.allocator;
+    var squares: [3]Polygon = undefined;
+    for (0..3) |i| squares[i] = try makeTestSquare(allocator, @as(f32, @floatFromInt(i + 1)));
+    defer for (&squares) |*s| s.deinit(allocator);
+
+    var prng = std.Random.DefaultPrng.init(42);
+    var ga = try GeneticAlgorithm.init(allocator, &squares, 20.0, 1.0, 6, 2, 1, prng.random(), null);
+    defer ga.deinit();
+    ga.initializePopulation();
+
+    for (ga.population) |chromo| {
+        var seen = [_]bool{false} ** 3;
+        for (chromo.sequence) |idx| {
+            try std.testing.expect(idx < 3);
+            try std.testing.expect(!seen[idx]);
+            seen[idx] = true;
+        }
+    }
+}
+
+test "GeneticAlgorithm evaluateFitness - valid placement sets finite fitness" {
+    const allocator = std.testing.allocator;
+    var sq = try makeTestSquare(allocator, 3);
+    defer sq.deinit(allocator);
+    var pieces = [_]Polygon{sq};
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var ga = try GeneticAlgorithm.init(allocator, &pieces, 10.0, 1.0, 2, 1, 1, prng.random(), null);
+    defer ga.deinit();
+
+    var chromo = &ga.population[0];
+    chromo.sequence[0] = 0;
+    chromo.rotations[0] = 0;
+    try ga.evaluateFitness(chromo);
+
+    try std.testing.expect(!chromo.placement_failed);
+    try std.testing.expect(chromo.fitness < std.math.floatMax(f32));
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), chromo.fitness, 0.1);
+}
+
+test "GeneticAlgorithm evaluateFitness - unplaceable piece sets floatMax" {
+    const allocator = std.testing.allocator;
+    // height=8 > strip_width=5 → can never be placed
+    var sq = try makeTestSquare(allocator, 8);
+    defer sq.deinit(allocator);
+    var pieces = [_]Polygon{sq};
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var ga = try GeneticAlgorithm.init(allocator, &pieces, 5.0, 1.0, 2, 1, 1, prng.random(), null);
+    defer ga.deinit();
+
+    var chromo = &ga.population[0];
+    chromo.sequence[0] = 0;
+    chromo.rotations[0] = 0;
+    try ga.evaluateFitness(chromo);
+
+    try std.testing.expect(chromo.placement_failed);
+    try std.testing.expectEqual(std.math.floatMax(f32), chromo.fitness);
+}
+
+test "GeneticAlgorithm crossover - child is a valid permutation" {
+    const allocator = std.testing.allocator;
+    var squares: [5]Polygon = undefined;
+    for (0..5) |i| squares[i] = try makeTestSquare(allocator, 2);
+    defer for (&squares) |*s| s.deinit(allocator);
+
+    var prng = std.Random.DefaultPrng.init(7);
+    var ga = try GeneticAlgorithm.init(allocator, &squares, 20.0, 1.0, 4, 2, 1, prng.random(), null);
+    defer ga.deinit();
+    ga.initializePopulation();
+
+    var child = try ga.crossover(ga.population[0], ga.population[1]);
+    defer child.deinit();
+
+    try std.testing.expectEqual(@as(usize, 5), child.sequence.len);
+    var seen = [_]bool{false} ** 5;
+    for (child.sequence) |idx| {
+        try std.testing.expect(idx < 5);
+        try std.testing.expect(!seen[idx]);
+        seen[idx] = true;
+    }
+}
+
+test "GeneticAlgorithm mutate - sequence remains a valid permutation" {
+    const allocator = std.testing.allocator;
+    var squares: [4]Polygon = undefined;
+    for (0..4) |i| squares[i] = try makeTestSquare(allocator, 2);
+    defer for (&squares) |*s| s.deinit(allocator);
+
+    var prng = std.Random.DefaultPrng.init(1);
+    var ga = try GeneticAlgorithm.init(allocator, &squares, 20.0, 1.0, 2, 1, 1, prng.random(), null);
+    defer ga.deinit();
+    ga.initializePopulation();
+
+    // mutation_rate=1.0 guarantees a swap occurs
+    ga.mutate(&ga.population[0], 1.0);
+
+    var seen = [_]bool{false} ** 4;
+    for (ga.population[0].sequence) |idx| {
+        try std.testing.expect(idx < 4);
+        try std.testing.expect(!seen[idx]);
+        seen[idx] = true;
+    }
+}
+
+test "GeneticAlgorithm evolveOneGeneration - population size unchanged" {
+    const allocator = std.testing.allocator;
+    var squares: [2]Polygon = undefined;
+    for (0..2) |i| squares[i] = try makeTestSquare(allocator, 2);
+    defer for (&squares) |*s| s.deinit(allocator);
+
+    var prng = std.Random.DefaultPrng.init(42);
+    var ga = try GeneticAlgorithm.init(allocator, &squares, 10.0, 1.0, 6, 2, 1, prng.random(), null);
+    defer ga.deinit();
+
+    ga.initializePopulation();
+    try ga.evaluateAll();
+    try ga.evolveOneGeneration();
+
+    try std.testing.expectEqual(@as(usize, 6), ga.population.len);
+}

@@ -189,6 +189,75 @@ pub fn performNesting(
     };
 }
 
+fn makeSquare(allocator: std.mem.Allocator, size: f32) !Polygon {
+    const v = try allocator.alloc(Vec2, 4);
+    v[0] = Vec2.init(0, 0);
+    v[1] = Vec2.init(size, 0);
+    v[2] = Vec2.init(size, size);
+    v[3] = Vec2.init(0, size);
+    var p = Polygon{ .vertices = v };
+    p.initBoundingBox();
+    return p;
+}
+
+test "performNesting - NoPieces error" {
+    const allocator = std.testing.allocator;
+    var pieces = [_]Polygon{};
+    const result = performNesting(allocator, &pieces, .{ .strip_width = 10 });
+    try std.testing.expectError(NestingError.NoPieces, result);
+}
+
+test "performNesting - InvalidStripWidth error" {
+    const allocator = std.testing.allocator;
+    var sq = try makeSquare(allocator, 5);
+    defer sq.deinit(allocator);
+    var pieces = [_]Polygon{sq};
+    try std.testing.expectError(NestingError.InvalidStripWidth, performNesting(allocator, &pieces, .{ .strip_width = 0 }));
+    try std.testing.expectError(NestingError.InvalidStripWidth, performNesting(allocator, &pieces, .{ .strip_width = -1 }));
+}
+
+test "performNesting - InvalidNumCores error" {
+    const allocator = std.testing.allocator;
+    var sq = try makeSquare(allocator, 5);
+    defer sq.deinit(allocator);
+    var pieces = [_]Polygon{sq};
+    try std.testing.expectError(NestingError.InvalidNumCores, performNesting(allocator, &pieces, .{ .strip_width = 10, .num_cores = 0 }));
+}
+
+test "performNesting - InvalidGridResolution error" {
+    const allocator = std.testing.allocator;
+    var sq = try makeSquare(allocator, 5);
+    defer sq.deinit(allocator);
+    var pieces = [_]Polygon{sq};
+    try std.testing.expectError(NestingError.InvalidGridResolution, performNesting(allocator, &pieces, .{ .strip_width = 10, .grid_resolution = 0 }));
+}
+
+test "performNesting - PieceTooWideForStrip error" {
+    const allocator = std.testing.allocator;
+    var sq = try makeSquare(allocator, 10);
+    defer sq.deinit(allocator);
+    var pieces = [_]Polygon{sq};
+    // piece height (10) > strip_width (5)
+    try std.testing.expectError(NestingError.PieceTooWideForStrip, performNesting(allocator, &pieces, .{ .strip_width = 5 }));
+}
+
+test "performNesting - NonConvexPolygon error" {
+    const allocator = std.testing.allocator;
+    // L-shape: not convex
+    const v = try allocator.alloc(Vec2, 6);
+    v[0] = Vec2.init(0, 0);
+    v[1] = Vec2.init(2, 0);
+    v[2] = Vec2.init(2, 1);
+    v[3] = Vec2.init(1, 1);
+    v[4] = Vec2.init(1, 2);
+    v[5] = Vec2.init(0, 2);
+    var lshape = Polygon{ .vertices = v };
+    lshape.initBoundingBox();
+    defer lshape.deinit(allocator);
+    var pieces = [_]Polygon{lshape};
+    try std.testing.expectError(NestingError.NonConvexPolygon, performNesting(allocator, &pieces, .{ .strip_width = 10 }));
+}
+
 test "performNesting with random convex polygons" {
     const allocator = std.testing.allocator;
 

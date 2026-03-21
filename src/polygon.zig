@@ -192,6 +192,52 @@ test "Polygon isConvex - L-shape is not convex" {
     try std.testing.expect(!p.isConvex());
 }
 
+test "Polygon normalizeToPositive - min vertex lands at origin" {
+    const allocator = std.testing.allocator;
+    const verts = try allocator.alloc(Vec2, 4);
+    verts[0] = Vec2.init(2, 3);
+    verts[1] = Vec2.init(5, 3);
+    verts[2] = Vec2.init(5, 7);
+    verts[3] = Vec2.init(2, 7);
+    var p = Polygon{ .vertices = verts };
+    defer p.deinit(allocator);
+
+    p.normalizeToPositive();
+
+    var min_x: f32 = std.math.floatMax(f32);
+    var min_y: f32 = std.math.floatMax(f32);
+    for (p.vertices) |v| {
+        min_x = @min(min_x, v.x);
+        min_y = @min(min_y, v.y);
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 0), min_x, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), min_y, 0.001);
+}
+
+test "Polygon clone - independent copy preserving geometry" {
+    const allocator = std.testing.allocator;
+    const verts = try allocator.alloc(Vec2, 4);
+    verts[0] = Vec2.init(0, 0);
+    verts[1] = Vec2.init(2, 0);
+    verts[2] = Vec2.init(2, 2);
+    verts[3] = Vec2.init(0, 2);
+    var orig = Polygon{ .vertices = verts };
+    orig.initBoundingBox();
+    defer orig.deinit(allocator);
+
+    var copy = try orig.clone(allocator);
+    defer copy.deinit(allocator);
+
+    try std.testing.expectApproxEqAbs(orig.area, copy.area, 0.001);
+    try std.testing.expectApproxEqAbs(orig.width, copy.width, 0.001);
+    try std.testing.expectApproxEqAbs(orig.height, copy.height, 0.001);
+    try std.testing.expectEqual(orig.vertices.len, copy.vertices.len);
+
+    // Mutating copy must not affect original
+    copy.vertices[0].x = 99;
+    try std.testing.expectApproxEqAbs(@as(f32, 0), orig.vertices[0].x, 0.001);
+}
+
 test "Polygon rotation preserves area" {
     const allocator = std.testing.allocator;
     const verts = try allocator.alloc(Vec2, 4);

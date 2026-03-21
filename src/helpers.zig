@@ -95,3 +95,55 @@ pub fn exportToSVG(items: []const PlacedItem, width: f32, height: f32, filename:
     try writer.writeAll("</svg>");
     try writer.flush();
 }
+
+test "generateRandomConvex - result is convex with positive area" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(123);
+
+    var poly = try generateRandomConvex(allocator, prng.random(), 10.0);
+    defer poly.deinit(allocator);
+
+    try std.testing.expect(poly.isConvex());
+    try std.testing.expect(poly.area > 0);
+    try std.testing.expect(poly.vertices.len >= 3);
+}
+
+test "generateRandomConvex - vertices normalized to non-negative coords" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(456);
+
+    for (0..5) |_| {
+        var poly = try generateRandomConvex(allocator, prng.random(), 8.0);
+        defer poly.deinit(allocator);
+        for (poly.vertices) |v| {
+            try std.testing.expect(v.x >= -0.001);
+            try std.testing.expect(v.y >= -0.001);
+        }
+    }
+}
+
+test "exportToSVG - produces file with SVG header" {
+    const allocator = std.testing.allocator;
+    const verts = try allocator.alloc(Vec2, 4);
+    verts[0] = Vec2.init(0, 0);
+    verts[1] = Vec2.init(3, 0);
+    verts[2] = Vec2.init(3, 3);
+    verts[3] = Vec2.init(0, 3);
+    var poly = Polygon{ .vertices = verts };
+    poly.initBoundingBox();
+    defer poly.deinit(allocator);
+
+    const item = PlacedItem{ .poly = poly, .pos = Vec2.init(0, 0), .rotation = 0, .piece_id = 0 };
+    const items = [_]PlacedItem{item};
+
+    const tmp_path = "test_svg_export_tmp.svg";
+    defer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+    try exportToSVG(&items, 10, 10, tmp_path, 90.0);
+
+    const file = try std.fs.cwd().openFile(tmp_path, .{});
+    defer file.close();
+    var buf: [64]u8 = undefined;
+    const n = try file.read(&buf);
+    try std.testing.expect(std.mem.startsWith(u8, buf[0..n], "<?xml"));
+}

@@ -1,3 +1,4 @@
+const std = @import("std");
 const RotationConstraint = @import("rotation_constraints.zig").RotationConstraint;
 
 pub const PieceConstraints = struct {
@@ -29,3 +30,42 @@ pub const PieceConstraints = struct {
         };
     }
 };
+
+test "PieceConstraints default has 8 free rotations" {
+    const pc = PieceConstraints.default;
+    try std.testing.expectEqual(RotationConstraint.free, pc.rotation_constraint);
+    try std.testing.expectEqual(@as(usize, 8), pc.allowed_rotations.len);
+    try std.testing.expectEqual(@as(f32, 0), pc.grain_angle);
+}
+
+test "PieceConstraints forGrainLine - fixed allows only 0 degrees" {
+    const pc = PieceConstraints.forGrainLine(0, .fixed);
+    try std.testing.expectEqual(RotationConstraint.fixed, pc.rotation_constraint);
+    try std.testing.expectEqual(@as(usize, 1), pc.allowed_rotations.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), pc.allowed_rotations[0], 0.001);
+}
+
+test "PieceConstraints forGrainLine - flip_only allows 0 and 180" {
+    const pc = PieceConstraints.forGrainLine(0, .flip_only);
+    try std.testing.expectEqual(RotationConstraint.flip_only, pc.rotation_constraint);
+    try std.testing.expectEqual(@as(usize, 2), pc.allowed_rotations.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), pc.allowed_rotations[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 180), pc.allowed_rotations[1], 0.001);
+}
+
+test "PieceConstraints forGrainLine - quarter_only allows 4 angles" {
+    const pc = PieceConstraints.forGrainLine(0, .quarter_only);
+    try std.testing.expectEqual(RotationConstraint.quarter_only, pc.rotation_constraint);
+    try std.testing.expectEqual(@as(usize, 4), pc.allowed_rotations.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), pc.allowed_rotations[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 90), pc.allowed_rotations[1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 180), pc.allowed_rotations[2], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 270), pc.allowed_rotations[3], 0.001);
+}
+
+test "PieceConstraints forGrainLine - free allows 8 angles" {
+    const pc = PieceConstraints.forGrainLine(45, .free);
+    try std.testing.expectEqual(RotationConstraint.free, pc.rotation_constraint);
+    try std.testing.expectEqual(@as(usize, 8), pc.allowed_rotations.len);
+    try std.testing.expectApproxEqAbs(@as(f32, 45), pc.grain_angle, 0.001);
+}
