@@ -100,6 +100,52 @@ fn runCase(
     };
 }
 
+/// L-shaped piece: (0,0),(2,0),(2,1),(1,1),(1,2),(0,2) — area = 3, CCW.
+fn makeLShape(allocator: std.mem.Allocator) !bps.Polygon {
+    const verts = try allocator.alloc(bps.Vec2, 6);
+    verts[0] = bps.Vec2.init(0, 0);
+    verts[1] = bps.Vec2.init(2, 0);
+    verts[2] = bps.Vec2.init(2, 1);
+    verts[3] = bps.Vec2.init(1, 1);
+    verts[4] = bps.Vec2.init(1, 2);
+    verts[5] = bps.Vec2.init(0, 2);
+    var poly = bps.Polygon{ .vertices = verts };
+    poly.initBoundingBox();
+    return poly;
+}
+
+/// T-shaped piece: (0,0),(3,0),(3,1),(2,1),(2,2),(1,2),(1,1),(0,1) — area = 5, CCW.
+fn makeTShape(allocator: std.mem.Allocator) !bps.Polygon {
+    const verts = try allocator.alloc(bps.Vec2, 8);
+    verts[0] = bps.Vec2.init(0, 0);
+    verts[1] = bps.Vec2.init(3, 0);
+    verts[2] = bps.Vec2.init(3, 1);
+    verts[3] = bps.Vec2.init(2, 1);
+    verts[4] = bps.Vec2.init(2, 2);
+    verts[5] = bps.Vec2.init(1, 2);
+    verts[6] = bps.Vec2.init(1, 1);
+    verts[7] = bps.Vec2.init(0, 1);
+    var poly = bps.Polygon{ .vertices = verts };
+    poly.initBoundingBox();
+    return poly;
+}
+
+/// Z-shaped (staircase) piece: (0,1),(2,1),(2,0),(3,0),(3,2),(1,2),(1,3),(0,3) — area = 5, CCW.
+fn makeZShape(allocator: std.mem.Allocator) !bps.Polygon {
+    const verts = try allocator.alloc(bps.Vec2, 8);
+    verts[0] = bps.Vec2.init(0, 1);
+    verts[1] = bps.Vec2.init(2, 1);
+    verts[2] = bps.Vec2.init(2, 0);
+    verts[3] = bps.Vec2.init(3, 0);
+    verts[4] = bps.Vec2.init(3, 2);
+    verts[5] = bps.Vec2.init(1, 2);
+    verts[6] = bps.Vec2.init(1, 3);
+    verts[7] = bps.Vec2.init(0, 3);
+    var poly = bps.Polygon{ .vertices = verts };
+    poly.initBoundingBox();
+    return poly;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -298,6 +344,78 @@ pub fn main() !void {
             .grid_resolution = 0.5,
         });
         try results.append(allocator, res);
+    }
+
+    // -----------------------------------------------------------------------
+    // Case 6 — 12 L-shaped pieces (non-convex), strip_width = 5
+    //   Each L has area 3.  lower_bound = 12*3/5 = 7.2
+    // -----------------------------------------------------------------------
+    {
+        const n = 12;
+        const strip_width: f32 = 5.0;
+        const piece_area: f32 = 3.0;
+        const lower_bound = @as(f32, @floatFromInt(n)) * piece_area / strip_width;
+
+        const pieces = try allocator.alloc(bps.Polygon, n);
+        defer {
+            for (pieces) |*p| p.deinit(allocator);
+            allocator.free(pieces);
+        }
+        for (pieces) |*p| p.* = try makeLShape(allocator);
+
+        const r = try runCase(allocator, "06_lshapes_nonconvex", pieces, lower_bound, .{
+            .strip_width = strip_width,
+            .num_cores = 4,
+            .population_per_core = 30,
+            .generations = 200,
+            .grid_resolution = 0.5,
+        });
+        try results.append(allocator, r);
+    }
+
+    // -----------------------------------------------------------------------
+    // Case 7 — 20 mixed non-convex (8 L-shapes + 6 T-shapes + 6 Z-shapes)
+    //   strip_width = 8
+    //   areas: L=3, T=5, Z=5 → total = 24+30+30 = 84 → lower_bound = 10.5
+    // -----------------------------------------------------------------------
+    {
+        const n_l = 8;
+        const n_t = 6;
+        const n_z = 6;
+        const n = n_l + n_t + n_z;
+        const strip_width: f32 = 8.0;
+        const total_area: f32 = @as(f32, @floatFromInt(n_l)) * 3.0 +
+            @as(f32, @floatFromInt(n_t)) * 5.0 +
+            @as(f32, @floatFromInt(n_z)) * 5.0;
+        const lower_bound = total_area / strip_width;
+
+        var pieces = try allocator.alloc(bps.Polygon, n);
+        defer {
+            for (pieces) |*p| p.deinit(allocator);
+            allocator.free(pieces);
+        }
+        var idx: usize = 0;
+        for (0..n_l) |_| {
+            pieces[idx] = try makeLShape(allocator);
+            idx += 1;
+        }
+        for (0..n_t) |_| {
+            pieces[idx] = try makeTShape(allocator);
+            idx += 1;
+        }
+        for (0..n_z) |_| {
+            pieces[idx] = try makeZShape(allocator);
+            idx += 1;
+        }
+
+        const r = try runCase(allocator, "07_mixed_nonconvex_20pcs", pieces, lower_bound, .{
+            .strip_width = strip_width,
+            .num_cores = 4,
+            .population_per_core = 30,
+            .generations = 200,
+            .grid_resolution = 0.5,
+        });
+        try results.append(allocator, r);
     }
 
     // -----------------------------------------------------------------------

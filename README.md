@@ -8,7 +8,7 @@ A high-performance 2D bin packing / nesting library written in Zig, using a mult
 
 - 🧬 **Multi-core Genetic Algorithm** - Parallel optimization across CPU cores with migration between populations
 - 🔄 **Rotation Support** - 8 rotation angles (0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°)
-- 📐 **Convex Polygon Support** - Works with arbitrary convex polygons
+- 📐 **Non-Convex Polygon Support** - Works with arbitrary simple polygons (convex and non-convex)
 - 🎯 **SAT Collision Detection** - Precise overlap detection using Separating Axis Theorem
 - 📊 **SVG Export** - Visualize results with automatic SVG generation
 - ⚡ **Zero Dependencies** - Pure Zig implementation
@@ -99,7 +99,7 @@ Runs the genetic algorithm to find an optimal placement. Returns a `NestingResul
 | `generations` | `usize` | `100` | Maximum number of generations |
 | `migration_interval` | `usize` | `10` | Generations between cross-population migrations |
 | `stagnation_limit` | `usize` | `20` | Early stop after N generations without improvement (`0` = disabled) |
-| `grid_resolution` | `f32` | `5.0` | Placement grid step size (smaller = more precise, slower) |
+| `grid_resolution` | `f32` | `5.0` | Placement grid step size for convex mode (smaller = more precise, slower). Unused in non-convex NFP mode. |
 | `verbose` | `bool` | `false` | Print progress to stderr |
 | `piece_constraints` | `?[]const PieceConstraints` | `null` | Per-piece rotation constraints |
 
@@ -112,7 +112,6 @@ Runs the genetic algorithm to find an optimal placement. Returns a `NestingResul
 | `InvalidNumCores` | `num_cores` = 0 |
 | `InvalidGridResolution` | `grid_resolution` ≤ 0 |
 | `PieceTooWideForStrip` | A piece's height exceeds `strip_width` |
-| `NonConvexPolygon` | A piece is not convex |
 
 ### `NestingResult`
 
@@ -155,15 +154,19 @@ zig build bench -Doptimize=ReleaseFast  # for representative timing
 
 ## Benchmarks
 
-`src/bench.zig` defines five deterministic cases with known theoretical lower bounds:
+`src/bench.zig` defines seven deterministic cases with known theoretical lower bounds:
 
 | Case | Pieces | Strip width | Shape type |
 |------|--------|-------------|------------|
-| 01 identical squares | 20 | 5.0 | 1×1 squares |
-| 02 mixed rectangles | 12 | 10.0 | 1×2, 2×3, 3×4 rects |
-| 03 right triangles 4×3 | 16 | 8.0 | right triangles |
-| 04 hexagons r=2 | 12 | 14.0 | regular hexagons |
-| 05 stress mixed | 40 | 15.0 | squares + rects + triangles + hexagons |
+| 01 identical squares | 20 | 5.0 | 1×1 squares (convex) |
+| 02 mixed rectangles | 12 | 10.0 | 1×2, 2×3, 3×4 rects (convex) |
+| 03 right triangles 4×3 | 16 | 8.0 | right triangles (convex) |
+| 04 hexagons r=2 | 12 | 14.0 | regular hexagons (convex) |
+| 05 stress mixed | 40 | 15.0 | squares + rects + triangles + hexagons (convex) |
+| 06 L-shapes | 12 | 5.0 | L-shaped pieces (non-convex) |
+| 07 mixed non-convex | 20 | 8.0 | L + T + Z shapes (non-convex) |
+
+Cases 01–05 use SAT-based collision detection (convex pieces). Cases 06–07 automatically switch to NFP-based exact placement (non-convex pieces, no grid quantization).
 
 Each run reports `lower_bound` (total area / strip width), achieved `length`, `efficiency` %, and a `ratio` (1.000 = optimal). See [benchmarks/README.md](benchmarks/README.md) for reference results and interpretation.
 
@@ -172,7 +175,7 @@ Each run reports `lower_bound` (total area / strip width), achieved `length`, `e
 The solver uses a Biased Random-Key Genetic Algorithm (BRKGA) with:
 
 1. **Encoding** - Each chromosome contains a permutation (placement order) and rotation angles per piece
-2. **Decoding** - Bottom-left-fill heuristic with AABB broad-phase + SAT collision detection
+2. **Decoding** - Bottom-left-fill heuristic with AABB broad-phase + SAT (convex) or NFP-vertex exact placement (non-convex)
 3. **Selection** - Elitist selection with biased crossover (30% elite, 20% mutants)
 4. **Migration** - Best solutions migrate between parallel populations every N generations
 5. **Early stop** - Stagnation detection halts cores that stop improving

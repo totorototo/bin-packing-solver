@@ -9,19 +9,31 @@ pub fn main() !void {
     var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
     const random = prng.random();
 
-    // Generate random convex polygons
-    const num_pieces = 100;
     var pieces = std.ArrayList(bps.Polygon){};
     defer {
         for (pieces.items) |*p| p.deinit(allocator);
         pieces.deinit(allocator);
     }
 
-    std.debug.print("🔧 Generating {d} random convex polygons...\n", .{num_pieces});
-    for (0..num_pieces) |_| {
+    const num_convex = 10;
+    const num_concave = 5;
+
+    std.debug.print("Generating {d} random convex polygons...\n", .{num_convex});
+    for (0..num_convex) |_| {
         const size = 5.0 + random.float(f32) * 10.0;
         try pieces.append(allocator, try bps.generateRandomConvex(allocator, random, size));
     }
+
+    std.debug.print("Generating {d} random concave polygons...\n", .{num_concave});
+    for (0..num_concave) |_| {
+        const size = 5.0 + random.float(f32) * 10.0;
+        try pieces.append(allocator, try bps.generateRandomConcave(allocator, random, size));
+    }
+
+    std.debug.print("\nTotal: {d} pieces ({d} convex + {d} concave)\n", .{
+        pieces.items.len, num_convex, num_concave,
+    });
+    std.debug.print("Concave pieces trigger automatic NFP-based placement.\n\n", .{});
 
     const nesting_start = std.time.milliTimestamp();
     var result = try bps.performNesting(allocator, pieces.items, .{
@@ -36,10 +48,8 @@ pub fn main() !void {
     const nesting_ms = std.time.milliTimestamp() - nesting_start;
     std.debug.print("\nNesting time: {d}ms ({d:.1}s)\n", .{ nesting_ms, @as(f32, @floatFromInt(nesting_ms)) / 1000.0 });
 
-    // Export result to SVG
-    std.debug.print("\n📁 Exporting result to SVG...\n", .{});
     var filename_buf: [128]u8 = undefined;
     const filename = try std.fmt.bufPrint(&filename_buf, "nesting_{d}.svg", .{std.time.timestamp()});
     try bps.exportToSVG(result.placed_items.items, result.final_length, 50.0, filename, result.efficiency);
-    std.debug.print("   Saved to: {s}\n", .{filename});
+    std.debug.print("Saved to: {s}\n", .{filename});
 }

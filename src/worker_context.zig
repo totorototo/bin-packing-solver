@@ -20,6 +20,7 @@ pub const WorkerContext = struct {
     allocator: std.mem.Allocator,
     seed: u64,
     verbose: bool = false,
+    use_nfp: bool = false,
 
     best_result: Chromosome = undefined,
     best_fitness: f32 = std.math.floatMax(f32),

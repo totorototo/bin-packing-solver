@@ -25,10 +25,13 @@ This is a library crate (`src/root.zig` is the public API) plus a demo executabl
 
 ```
 performNesting (nesting.zig)
+  └─ auto-detects non-convex pieces → sets use_nfp=true if any piece is non-convex
   └─ spawns N threads → workerThread (worker_thread.zig)
        └─ GeneticAlgorithm (genetic_algorithm.zig)
             └─ evaluateFitness → Packer (packer.zig)
-                 └─ checkOverlap → AABB broad-phase → isOverlappingSAT (sat.zig)
+                 ├─ [convex]     AABB broad-phase → isOverlappingSAT (sat.zig)
+                 └─ [non-convex] AABB broad-phase → computeNFPParts → checkOverlapNFPParts (nfp.zig)
+                      └─ computeNFPParts: decomposeConvex (decompose.zig) → pairwise computeNFP
   └─ MigrationPool (migration_pool.zig)   ← shared between threads, mutex-guarded
   └─ best Chromosome → final Packer run → NestingResult
 ```
@@ -37,7 +40,7 @@ performNesting (nesting.zig)
 
 | Type | File | Role |
 |---|---|---|
-| `Polygon` | `polygon.zig` | Convex polygon: vertices, AABB (`width`/`height`), `area`, `centroid`. Must call `initBoundingBox()` after construction. |
+| `Polygon` | `polygon.zig` | Simple polygon (convex or non-convex): vertices, AABB (`width`/`height`), `area`, `centroid`. Must call `initBoundingBox()` after construction. |
 | `Chromosome` | `chromosome.zig` | GA individual: `sequence[]usize` (piece order) + `rotations[]f32` (one angle per piece). `piece_constraints` is a shared (non-owned) reference. |
 | `GeneticAlgorithm` | `genetic_algorithm.zig` | BRKGA: elitism (30%), mutants (20%), crossover (OX1 with rotation inheritance), mutation rate 0.05. |
 | `Packer` | `packer.zig` | Bottom-left-fill placement. Grid-scan over X then Y; breaks on first valid Y per X column. Fitness = `getLength()` (X extent). |
@@ -68,6 +71,13 @@ performNesting (nesting.zig)
 
 `isOverlappingSAT` uses strict `<` comparison on interval overlap. Two polygons that share exactly one edge are considered **overlapping** by the implementation. Tests reflect this intentional behaviour.
 
-### `generateRandomConvex` in `helpers.zig`
+### Non-convex polygon support
 
-Uses Jarvis march (gift wrapping) to guarantee convex output. `performNesting` rejects non-convex polygons with `NestingError.NonConvexPolygon`, so any polygon passed in must satisfy `poly.isConvex()`.
+`performNesting` accepts any simple polygon (CCW winding, no self-intersections). If any piece is non-convex, it automatically switches to NFP-based collision detection (`use_nfp=true`) for all pieces.
+
+The NFP pipeline:
+- `decompose.zig` — ear-clipping triangulation: decomposes a simple polygon into triangles (all convex)
+- `nfp.zig` — Minkowski sum for convex pairs (O(n+m)); `computeNFPParts` calls decompose on both polygons and returns all pairwise convex NFPs as a flat `[]Polygon`
+- Collision test: relative position inside ANY NFP part → forbidden
+
+`generateRandomConvex` in `helpers.zig` uses Jarvis march (gift wrapping) to guarantee convex output.

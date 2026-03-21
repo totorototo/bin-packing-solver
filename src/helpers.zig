@@ -65,6 +65,41 @@ pub fn generateRandomConvex(allocator: std.mem.Allocator, rand: std.Random, size
     return p;
 }
 
+/// Generate a random concave (simple, non-convex) polygon.
+///
+/// Starts from a random convex polygon, picks a random edge, and inserts a
+/// vertex shifted inward toward the centroid — creating one reflex angle.
+/// The returned polygon is heap-allocated; free with `poly.deinit(allocator)`.
+pub fn generateRandomConcave(allocator: std.mem.Allocator, rand: std.Random, size: f32) !Polygon {
+    var base = try generateRandomConvex(allocator, rand, size);
+    defer base.deinit(allocator);
+
+    const n = base.vertices.len;
+    const edge_idx = rand.uintLessThan(usize, n);
+    const a = base.vertices[edge_idx];
+    const b = base.vertices[(edge_idx + 1) % n];
+
+    // Midpoint of edge, shifted toward centroid (30–70 % of the way).
+    const mx = (a.x + b.x) * 0.5;
+    const my = (a.y + b.y) * 0.5;
+    const t = 0.3 + rand.float(f32) * 0.4;
+    const notch = Vec2.init(
+        mx + t * (base.centroid.x - mx),
+        my + t * (base.centroid.y - my),
+    );
+
+    // Build new vertex list: insert notch after edge_idx.
+    const new_verts = try allocator.alloc(Vec2, n + 1);
+    @memcpy(new_verts[0 .. edge_idx + 1], base.vertices[0 .. edge_idx + 1]);
+    new_verts[edge_idx + 1] = notch;
+    @memcpy(new_verts[edge_idx + 2 ..], base.vertices[edge_idx + 1 ..]);
+
+    var poly = Polygon{ .vertices = new_verts };
+    poly.normalizeToPositive();
+    poly.initBoundingBox();
+    return poly;
+}
+
 pub fn exportToSVG(items: []const PlacedItem, width: f32, height: f32, filename: []const u8, efficiency: f32) !void {
     const file = try std.fs.cwd().createFile(filename, .{});
     defer file.close();
@@ -94,6 +129,20 @@ pub fn exportToSVG(items: []const PlacedItem, width: f32, height: f32, filename:
 
     try writer.writeAll("</svg>");
     try writer.flush();
+}
+
+test "generateRandomConcave - result is concave with positive area" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(789);
+
+    for (0..5) |_| {
+        var poly = try generateRandomConcave(allocator, prng.random(), 10.0);
+        defer poly.deinit(allocator);
+
+        try std.testing.expect(!poly.isConvex());
+        try std.testing.expect(poly.area > 0);
+        try std.testing.expect(poly.vertices.len >= 4);
+    }
 }
 
 test "generateRandomConvex - result is convex with positive area" {

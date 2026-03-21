@@ -32,7 +32,6 @@ pub const NestingError = error{
     InvalidNumCores,
     InvalidGridResolution,
     PieceTooWideForStrip,
-    NonConvexPolygon,
 };
 
 pub fn performNesting(
@@ -44,9 +43,10 @@ pub fn performNesting(
     if (config.strip_width <= 0) return NestingError.InvalidStripWidth;
     if (config.num_cores == 0) return NestingError.InvalidNumCores;
     if (config.grid_resolution <= 0) return NestingError.InvalidGridResolution;
+    var use_nfp = false;
     for (pieces) |p| {
         if (p.height > config.strip_width) return NestingError.PieceTooWideForStrip;
-        if (!p.isConvex()) return NestingError.NonConvexPolygon;
+        if (!p.isConvex()) use_nfp = true;
     }
 
     const elite_size: usize = @intFromFloat(@as(f32, @floatFromInt(config.population_per_core)) * 0.3);
@@ -89,6 +89,7 @@ pub fn performNesting(
             .allocator = allocator,
             .seed = seed,
             .verbose = config.verbose,
+            .use_nfp = use_nfp,
         };
     }
 
@@ -127,6 +128,7 @@ pub fn performNesting(
     const best_chromo = contexts[global_best_idx].best_result;
 
     var final_packer = Packer.init(allocator, config.strip_width, config.grid_resolution);
+    final_packer.use_nfp = use_nfp;
     defer final_packer.deinit();
 
     var skipped_pieces: usize = 0;
@@ -241,9 +243,9 @@ test "performNesting - PieceTooWideForStrip error" {
     try std.testing.expectError(NestingError.PieceTooWideForStrip, performNesting(allocator, &pieces, .{ .strip_width = 5 }));
 }
 
-test "performNesting - NonConvexPolygon error" {
+test "performNesting - non-convex L-shape is accepted and nested" {
     const allocator = std.testing.allocator;
-    // L-shape: not convex
+    // L-shape: not convex — should succeed with NFP-based collision detection
     const v = try allocator.alloc(Vec2, 6);
     v[0] = Vec2.init(0, 0);
     v[1] = Vec2.init(2, 0);
@@ -255,7 +257,9 @@ test "performNesting - NonConvexPolygon error" {
     lshape.initBoundingBox();
     defer lshape.deinit(allocator);
     var pieces = [_]Polygon{lshape};
-    try std.testing.expectError(NestingError.NonConvexPolygon, performNesting(allocator, &pieces, .{ .strip_width = 10 }));
+    var result = try performNesting(allocator, &pieces, .{ .strip_width = 10, .num_cores = 1, .generations = 1 });
+    defer result.deinit();
+    try std.testing.expect(result.placed_items.items.len == 1);
 }
 
 test "performNesting with random convex polygons" {

@@ -17,6 +17,8 @@ pub const GeneticAlgorithm = struct {
     random: std.Random,
     /// Optional per-piece constraints for grain line support
     piece_constraints: ?[]const PieceConstraints = null,
+    /// When true, use NFP-based collision detection (required for non-convex pieces).
+    use_nfp: bool = false,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -65,6 +67,7 @@ pub const GeneticAlgorithm = struct {
 
     pub fn evaluateFitness(self: *GeneticAlgorithm, chromo: *Chromosome) !void {
         var packer = Packer.init(self.allocator, self.strip_width, self.grid_resolution);
+        packer.use_nfp = self.use_nfp;
         defer packer.deinit();
 
         for (chromo.sequence) |piece_idx| {

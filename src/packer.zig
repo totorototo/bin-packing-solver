@@ -3,12 +3,17 @@ const Vec2 = @import("vec2.zig").Vec2;
 const Polygon = @import("polygon.zig").Polygon;
 const PlacedItem = @import("placed_item.zig").PlacedItem;
 const isOverlappingSAT = @import("sat.zig").isOverlappingSAT;
+const nfp_mod = @import("nfp.zig");
 
 pub const Packer = struct {
     strip_width: f32,
     placed_items: std.ArrayList(PlacedItem),
     grid_resolution: f32,
     allocator: std.mem.Allocator,
+    /// When true, use NFP-based collision detection instead of SAT.
+    /// NFP handles any convex polygon pair and is the foundation for
+    /// eventually supporting non-convex pieces.
+    use_nfp: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, strip_width: f32, grid_resolution: f32) Packer {
         return .{
@@ -45,7 +50,95 @@ pub const Packer = struct {
         return false;
     }
 
+    /// NFP-aware overlap check using precomputed multi-part NFPs.
+    fn checkOverlapNFP(self: *Packer, poly: Polygon, test_pos: Vec2, nfp_parts_list: []const []Polygon) bool {
+        if (test_pos.x < 0 or test_pos.y < 0) return true;
+        if (test_pos.y + poly.height > self.strip_width) return true;
+        for (self.placed_items.items, 0..) |item, idx| {
+            if (!aabbOverlap(test_pos, poly.width, poly.height, item.pos, item.poly.width, item.poly.height)) continue;
+            if (nfp_mod.checkOverlapNFPParts(item.pos, test_pos, nfp_parts_list[idx])) return true;
+        }
+        return false;
+    }
+
+    /// Place `poly` using NFP-based collision detection (supports non-convex polygons).
+    /// Precomputes NFP parts for every already-placed piece, then finds the
+    /// leftmost-bottommost valid position from the finite set of NFP-vertex candidates.
+    /// This is exact (no grid quantization) and O(n²·m) where m = NFP vertex count.
+    fn placePolygonWithNFP(self: *Packer, poly: Polygon, piece_id: usize, rotation: f32) !?PlacedItem {
+        // Precompute NFP parts ([]Polygon) per already-placed piece.
+        const nfp_parts_list = try self.allocator.alloc([]Polygon, self.placed_items.items.len);
+        var computed: usize = 0;
+        errdefer {
+            for (nfp_parts_list[0..computed]) |parts| nfp_mod.freeNFPParts(self.allocator, parts);
+            self.allocator.free(nfp_parts_list);
+        }
+        for (self.placed_items.items) |item| {
+            nfp_parts_list[computed] = try nfp_mod.computeNFPParts(self.allocator, item.poly, poly);
+            computed += 1;
+        }
+        defer {
+            for (nfp_parts_list) |parts| nfp_mod.freeNFPParts(self.allocator, parts);
+            self.allocator.free(nfp_parts_list);
+        }
+
+        // Build candidate positions. The optimal BLF placement always lies either
+        // at (0,0), on the strip boundary, or touching another piece — i.e. at a
+        // translated NFP vertex. For each NFP vertex we also try sliding to y=0
+        // (bottom of strip) and y=strip_width-poly.height (top of strip) at that x.
+        var candidates = std.ArrayList(Vec2){};
+        defer candidates.deinit(self.allocator);
+
+        try candidates.append(self.allocator, Vec2.init(0, 0));
+        if (self.strip_width > poly.height) {
+            try candidates.append(self.allocator, Vec2.init(0, self.strip_width - poly.height));
+        }
+
+        for (self.placed_items.items, 0..) |item, idx| {
+            for (nfp_parts_list[idx]) |part| {
+                for (part.vertices) |v| {
+                    const abs = item.pos.add(v);
+                    try candidates.append(self.allocator, abs);
+                    try candidates.append(self.allocator, Vec2.init(abs.x, 0));
+                    try candidates.append(self.allocator, Vec2.init(0, abs.y));
+                    if (self.strip_width > poly.height) {
+                        try candidates.append(self.allocator, Vec2.init(abs.x, self.strip_width - poly.height));
+                    }
+                }
+            }
+        }
+
+        // Select the leftmost (then bottommost) valid candidate.
+        var best_pos: ?Vec2 = null;
+        var best_x: f32 = std.math.floatMax(f32);
+        var best_y: f32 = std.math.floatMax(f32);
+
+        for (candidates.items) |candidate| {
+            if (self.checkOverlapNFP(poly, candidate, nfp_parts_list)) continue;
+            if (candidate.x < best_x - 1e-6 or
+                (candidate.x < best_x + 1e-6 and candidate.y < best_y - 1e-6))
+            {
+                best_x = candidate.x;
+                best_y = candidate.y;
+                best_pos = candidate;
+            }
+        }
+
+        if (best_pos) |pos| {
+            const placed_poly = try poly.clone(self.allocator);
+            return PlacedItem{
+                .poly = placed_poly,
+                .pos = pos,
+                .rotation = rotation,
+                .piece_id = piece_id,
+            };
+        }
+        return null;
+    }
+
     pub fn placePolygon(self: *Packer, poly: Polygon, piece_id: usize, rotation: f32) !?PlacedItem {
+        if (self.use_nfp) return self.placePolygonWithNFP(poly, piece_id, rotation);
+
         const max_search_length = self.getLength() + poly.width + 50.0;
         var best_pos: ?Vec2 = null;
         var best_x: f32 = std.math.floatMax(f32);
@@ -229,4 +322,74 @@ test "Packer places two squares side by side" {
     // Second square must be placed to the right of the first
     try std.testing.expect(r2.?.pos.x >= 4.0);
     r2.?.poly.deinit(allocator);
+}
+
+test "NFP packer places two squares side by side (same as SAT)" {
+    const allocator = std.testing.allocator;
+    const makeSquare = struct {
+        fn f(alloc: std.mem.Allocator, size: f32) !Polygon {
+            const v = try alloc.alloc(Vec2, 4);
+            v[0] = Vec2.init(0, 0);
+            v[1] = Vec2.init(size, 0);
+            v[2] = Vec2.init(size, size);
+            v[3] = Vec2.init(0, size);
+            var p = Polygon{ .vertices = v };
+            p.initBoundingBox();
+            return p;
+        }
+    }.f;
+
+    // SAT packer
+    var sat_packer = Packer.init(allocator, 4.0, 1.0);
+    defer sat_packer.deinit();
+    var a1 = try makeSquare(allocator, 4.0);
+    var b1 = try makeSquare(allocator, 4.0);
+    defer a1.deinit(allocator);
+    defer b1.deinit(allocator);
+    const sat_r1 = try sat_packer.placePolygon(a1, 0, 0);
+    try std.testing.expect(sat_r1 != null);
+    try sat_packer.placed_items.append(allocator, sat_r1.?);
+    var sat_r2 = try sat_packer.placePolygon(b1, 1, 0);
+    try std.testing.expect(sat_r2 != null);
+    const sat_x = sat_r2.?.pos.x;
+    sat_r2.?.poly.deinit(allocator);
+
+    // NFP packer
+    var nfp_packer = Packer{ .strip_width = 4.0, .grid_resolution = 1.0, .allocator = allocator, .placed_items = .{}, .use_nfp = true };
+    defer nfp_packer.deinit();
+    var a2 = try makeSquare(allocator, 4.0);
+    var b2 = try makeSquare(allocator, 4.0);
+    defer a2.deinit(allocator);
+    defer b2.deinit(allocator);
+    const nfp_r1 = try nfp_packer.placePolygon(a2, 0, 0);
+    try std.testing.expect(nfp_r1 != null);
+    try nfp_packer.placed_items.append(allocator, nfp_r1.?);
+    var nfp_r2 = try nfp_packer.placePolygon(b2, 1, 0);
+    try std.testing.expect(nfp_r2 != null);
+    const nfp_x = nfp_r2.?.pos.x;
+    nfp_r2.?.poly.deinit(allocator);
+
+    // Both should place the second square at the same x position
+    try std.testing.expectApproxEqAbs(sat_x, nfp_x, 0.01);
+}
+
+test "NFP packer - single square placed at origin" {
+    const allocator = std.testing.allocator;
+    var packer = Packer{ .strip_width = 10.0, .grid_resolution = 1.0, .allocator = allocator, .placed_items = .{}, .use_nfp = true };
+    defer packer.deinit();
+
+    const v = try allocator.alloc(Vec2, 4);
+    v[0] = Vec2.init(0, 0);
+    v[1] = Vec2.init(3, 0);
+    v[2] = Vec2.init(3, 3);
+    v[3] = Vec2.init(0, 3);
+    var poly = Polygon{ .vertices = v };
+    poly.initBoundingBox();
+    defer poly.deinit(allocator);
+
+    var result = try packer.placePolygon(poly, 0, 0);
+    try std.testing.expect(result != null);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), result.?.pos.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), result.?.pos.y, 0.01);
+    result.?.poly.deinit(allocator);
 }

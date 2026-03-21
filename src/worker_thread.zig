@@ -29,6 +29,7 @@ pub fn workerThread(ctx: *WorkerContext) !void {
     );
     defer ga.deinit();
 
+    ga.use_nfp = ctx.use_nfp;
     ga.initializePopulation();
     try ga.evaluateAll();
 
