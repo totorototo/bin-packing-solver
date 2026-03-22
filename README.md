@@ -9,7 +9,7 @@ A high-performance 2D bin packing / nesting library written in Zig, using a mult
 - 🧬 **Multi-core Genetic Algorithm** - Parallel optimization across CPU cores with migration between populations
 - 🔄 **Rotation Support** - 8 rotation angles (0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°)
 - 📐 **Non-Convex Polygon Support** - Works with arbitrary simple polygons (convex and non-convex)
-- 🎯 **SAT Collision Detection** - Precise overlap detection using Separating Axis Theorem
+- 🎯 **Adaptive Collision Detection** - SAT (Separating Axis Theorem) for convex pieces; NFP (No-Fit Polygon / Minkowski sum) for non-convex pieces — selected automatically
 - 📊 **SVG Export** - Visualize results with automatic SVG generation
 - ⚡ **Zero Dependencies** - Pure Zig implementation
 
@@ -42,15 +42,31 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create polygons
-    var pieces = std.ArrayList(bps.Polygon){};
+    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+    const random = prng.random();
+
+    var pieces = std.ArrayList(bps.Polygon).init(allocator);
     defer {
         for (pieces.items) |*p| p.deinit(allocator);
-        pieces.deinit(allocator);
+        pieces.deinit();
     }
 
-    // Add your polygons here...
-    // try pieces.append(allocator, your_polygon);
+    // Generate random convex and concave pieces
+    for (0..20) |_| {
+        const size = 5.0 + random.float(f32) * 10.0;
+        try pieces.append(try bps.generateRandomConvex(allocator, random, size));
+    }
+    for (0..10) |_| {
+        const size = 5.0 + random.float(f32) * 10.0;
+        try pieces.append(try bps.generateRandomConcave(allocator, random, size));
+    }
+
+    // Or construct a polygon directly from vertices using Polygon.init
+    const verts = [_]bps.Vec2{
+        .{ .x = 0, .y = 0 }, .{ .x = 4, .y = 0 },
+        .{ .x = 4, .y = 3 }, .{ .x = 0, .y = 3 },
+    };
+    try pieces.append(try bps.Polygon.init(allocator, &verts));
 
     // Perform nesting
     var result = try bps.performNesting(allocator, pieces.items, .{
@@ -60,7 +76,7 @@ pub fn main() !void {
         .generations = 100,
         .migration_interval = 10,
         .stagnation_limit = 20,   // stop early if no improvement (0 = disabled)
-        .grid_resolution = 5.0,   // placement grid step size
+        .grid_resolution = 5.0,   // placement grid step size (convex mode only)
         .verbose = false,
     });
     defer result.deinit();
@@ -124,7 +140,7 @@ Runs the genetic algorithm to find an optimal placement. Returns a `NestingResul
 
 ### Types
 
-- `Polygon` - Convex polygon with vertices, bounding box, and area
+- `Polygon` - Simple polygon (convex or non-convex) with vertices, bounding box, and area. Use `Polygon.init(allocator, verts)` to construct from a vertex slice.
 - `Vec2` - 2D vector (`x`, `y`)
 - `PlacedItem` - A placed polygon with `pos`, `rotation`, and `piece_id`
 - `PieceConstraints` - Per-piece allowed rotation angles
@@ -133,6 +149,7 @@ Runs the genetic algorithm to find an optimal placement. Returns a `NestingResul
 ### Helpers
 
 - `generateRandomConvex(allocator, random, size)` - Generate a random convex polygon
+- `generateRandomConcave(allocator, random, size)` - Generate a random concave (non-convex) polygon
 - `exportToSVG(items, length, width, filename, efficiency)` - Export placement to SVG
 
 ## Building
