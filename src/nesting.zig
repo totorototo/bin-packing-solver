@@ -13,6 +13,7 @@ const generateRandomConvex = @import("helpers.zig").generateRandomConvex;
 const exportToSVG = @import("helpers.zig").exportToSVG;
 const workerThread = @import("worker_thread.zig").workerThread;
 const SharedFitnessCache = @import("shared_fitness_cache.zig").SharedFitnessCache;
+const SharedNfpCache = @import("shared_nfp_cache.zig").SharedNfpCache;
 
 pub const NestingConfig = struct {
     strip_width: f32,
@@ -79,6 +80,10 @@ pub fn performNesting(
     var shared_fitness_cache = SharedFitnessCache.init(allocator);
     defer shared_fitness_cache.deinit();
 
+    const rotation_angles = &[_]f32{ 0, 45, 90, 135, 180, 225, 270, 315 };
+    var shared_nfp_cache = SharedNfpCache.init(allocator, rotation_angles);
+    defer shared_nfp_cache.deinit();
+
     var contexts = try allocator.alloc(WorkerContext, config.num_cores);
     defer allocator.free(contexts);
 
@@ -108,6 +113,7 @@ pub fn performNesting(
             .use_nfp = use_nfp,
             .mutation_rate = config.mutation_rate,
             .shared_fitness_cache = &shared_fitness_cache,
+            .shared_nfp_cache = &shared_nfp_cache,
             .timeout_end_ms = timeout_end_ms,
         };
     }
@@ -148,6 +154,7 @@ pub fn performNesting(
 
     var final_packer = Packer.init(allocator, config.strip_width, config.grid_resolution);
     final_packer.use_nfp = use_nfp;
+    final_packer.shared_nfp_cache = if (use_nfp) &shared_nfp_cache else null;
     defer final_packer.deinit();
 
     var skipped_pieces: usize = 0;

@@ -4,7 +4,7 @@ const Polygon = @import("polygon.zig").Polygon;
 const PlacedItem = @import("placed_item.zig").PlacedItem;
 const isOverlappingSAT = @import("sat.zig").isOverlappingSAT;
 const nfp_mod = @import("nfp.zig");
-const NfpCache = @import("nfp_cache.zig").NfpCache;
+const SharedNfpCache = @import("shared_nfp_cache.zig").SharedNfpCache;
 
 pub const Packer = struct {
     strip_width: f32,
@@ -19,7 +19,7 @@ pub const Packer = struct {
     /// borrows NFP parts from it instead of recomputing them each call.
     /// The cache is owned by the caller (GeneticAlgorithm); the Packer
     /// only holds a borrowed pointer.
-    nfp_cache: ?*NfpCache = null,
+    shared_nfp_cache: ?*SharedNfpCache = null,
     /// Reusable buffer for NFP-vertex candidate positions.
     /// Allocated once per Packer lifetime; cleared (without freeing) between
     /// placements so the underlying memory is reused across all pieces in an
@@ -91,7 +91,7 @@ pub const Packer = struct {
         //   no-cache path → owned here,          MUST free elements
         const nfp_parts_list = try self.allocator.alloc([]Polygon, n_placed);
 
-        if (self.nfp_cache) |cache| {
+        if (self.shared_nfp_cache) |cache| {
             // --- Cache path: borrow, no element ownership ---
             defer self.allocator.free(nfp_parts_list);
 
@@ -101,6 +101,7 @@ pub const Packer = struct {
                 nfp_parts_list[i] = try cache.getOrCompute(
                     item.piece_id, a_rot_idx,
                     piece_id, b_rot_idx,
+                    item.poly, poly,
                 );
             }
 

@@ -3,8 +3,8 @@ const Chromosome = @import("chromosome.zig").Chromosome;
 const Polygon = @import("polygon.zig").Polygon;
 const Packer = @import("packer.zig").Packer;
 const PieceConstraints = @import("piece_constraints.zig").PieceConstraints;
-const NfpCache = @import("nfp_cache.zig").NfpCache;
 const SharedFitnessCache = @import("shared_fitness_cache.zig").SharedFitnessCache;
+const SharedNfpCache = @import("shared_nfp_cache.zig").SharedNfpCache;
 
 pub const GeneticAlgorithm = struct {
     population_size: usize,
@@ -28,9 +28,10 @@ pub const GeneticAlgorithm = struct {
     /// evaluations borrow from this table — zero rotateByAngle calls in the
     /// hot path.  Owned by this GA instance; freed in deinit.
     rotated_pieces: [][]Polygon,
-    /// Lazy NFP cache — allocated on first evaluateFitness call when use_nfp=true.
-    /// Borrows rotated_pieces from this GA.  Owned by this GA instance.
-    nfp_cache: ?NfpCache = null,
+    /// Shared NFP cache borrowed from the nesting coordinator.  When non-null,
+    /// NFP parts are looked up (or computed once) from this shared table — no
+    /// per-GA NfpCache needed.  Null in standalone / test contexts.
+    shared_nfp_cache: ?*SharedNfpCache = null,
     /// Shared fitness cache borrowed from the nesting coordinator.  When non-null,
     /// all cores read from and write to the same mutex-guarded map so that every
     /// chromosome evaluated by any thread is never re-evaluated by another.
@@ -109,8 +110,7 @@ pub const GeneticAlgorithm = struct {
             self.allocator.free(row);
         }
         self.allocator.free(self.rotated_pieces);
-        if (self.nfp_cache) |*c| c.deinit();
-        // shared_fitness_cache is borrowed — not freed here.
+        // shared_nfp_cache and shared_fitness_cache are borrowed — not freed here.
     }
 
     /// Map a rotation angle (degrees) to its index in rotation_angles.
@@ -149,15 +149,9 @@ pub const GeneticAlgorithm = struct {
             }
         }
 
-        // Lazily build the NFP cache on the first NFP evaluation; pass the
-        // already-built rotated table so getOrCompute never calls rotateByAngle.
-        if (self.use_nfp and self.nfp_cache == null) {
-            self.nfp_cache = NfpCache.init(self.allocator, self.rotated_pieces, self.rotation_angles);
-        }
-
         var packer = Packer.init(self.allocator, self.strip_width, self.grid_resolution);
         packer.use_nfp = self.use_nfp;
-        packer.nfp_cache = if (self.nfp_cache) |*c| c else null;
+        packer.shared_nfp_cache = self.shared_nfp_cache;
         defer packer.deinit();
 
         for (chromo.sequence) |piece_idx| {

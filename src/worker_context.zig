@@ -4,6 +4,7 @@ const Polygon = @import("polygon.zig").Polygon;
 const PieceConstraints = @import("piece_constraints.zig").PieceConstraints;
 const MigrationPool = @import("migration_pool.zig").MigrationPool;
 const SharedFitnessCache = @import("shared_fitness_cache.zig").SharedFitnessCache;
+const SharedNfpCache = @import("shared_nfp_cache.zig").SharedNfpCache;
 
 pub const WorkerContext = struct {
     core_id: usize,
@@ -23,6 +24,7 @@ pub const WorkerContext = struct {
     verbose: bool = false,
     use_nfp: bool = false,
     shared_fitness_cache: ?*SharedFitnessCache = null,
+    shared_nfp_cache: ?*SharedNfpCache = null,
     mutation_rate: f32 = 0.05,
     /// Absolute deadline in milliseconds (from std.time.milliTimestamp). Null = no timeout.
     timeout_end_ms: ?i64 = null,
