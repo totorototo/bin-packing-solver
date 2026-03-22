@@ -5,6 +5,8 @@ pub const Polygon = struct {
     vertices: []Vec2,
     width: f32 = 0,
     height: f32 = 0,
+    min_x: f32 = 0,
+    min_y: f32 = 0,
     area: f32 = 0,
     centroid: Vec2 = Vec2.init(0, 0),
 
@@ -32,6 +34,8 @@ pub const Polygon = struct {
             min_y = @min(min_y, v.y);
         }
 
+        self.min_x = min_x;
+        self.min_y = min_y;
         self.width = max_x - min_x;
         self.height = max_y - min_y;
         self.area = self.calculateArea();
@@ -125,6 +129,8 @@ pub const Polygon = struct {
             .vertices = new_verts,
             .width = self.width,
             .height = self.height,
+            .min_x = self.min_x,
+            .min_y = self.min_y,
             .area = self.area,
             .centroid = self.centroid,
         };

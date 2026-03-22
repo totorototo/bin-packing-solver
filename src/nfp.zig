@@ -221,9 +221,14 @@ pub fn freeNFPParts(allocator: std.mem.Allocator, parts: []Polygon) void {
 
 /// Check collision using multi-part NFP.
 /// Returns true if `posB − posA` lies inside any of the NFP parts.
+/// Each part's stored AABB (min_x/min_y/width/height) is used to reject
+/// the point before the full ray-casting PIP test — a 4-comparison fast
+/// path that skips triangles where the relative position is clearly outside.
 pub fn checkOverlapNFPParts(posA: Vec2, posB: Vec2, nfp_parts: []const Polygon) bool {
     const relative = posB.sub(posA);
     for (nfp_parts) |part| {
+        if (relative.x < part.min_x or relative.x > part.min_x + part.width) continue;
+        if (relative.y < part.min_y or relative.y > part.min_y + part.height) continue;
         if (pointInPolygon(relative, part)) return true;
     }
     return false;
