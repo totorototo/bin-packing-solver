@@ -177,7 +177,10 @@ pub const Packer = struct {
         // an epsilon-based comparator can violate transitivity of the equivalence
         // relation and trigger usize underflow inside the block sort algorithm.
         // The epsilon early-exit below is independent and unaffected by this choice.
-        std.mem.sort(Vec2, candidates.items, {}, struct {
+        // Stability is not required (ties in x are broken by the comparator's
+        // y clause, not by original insertion order).  sortUnstable (pdq-sort)
+        // is ~2-4× faster than the stable block-sort for random candidate sets.
+        std.mem.sortUnstable(Vec2, candidates.items, {}, struct {
             fn lessThan(_: void, a: Vec2, b: Vec2) bool {
                 if (a.x != b.x) return a.x < b.x;
                 return a.y < b.y;
