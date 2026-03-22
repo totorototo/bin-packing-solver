@@ -37,6 +37,11 @@ pub const GeneticAlgorithm = struct {
     /// chromosome evaluated by any thread is never re-evaluated by another.
     /// Null in standalone / test contexts — caching is simply skipped.
     shared_fitness_cache: ?*SharedFitnessCache = null,
+    /// Arena allocator reused across fitness evaluations.  Reset (not freed) between
+    /// evaluations so the backing pages stay warm — eliminates per-alloc GPA lock
+    /// overhead and mmap syscalls for the Packer's candidates buffer and placed-item
+    /// list within each evaluation.  Owned by this GA; freed in deinit.
+    eval_arena: std.heap.ArenaAllocator,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -97,6 +102,7 @@ pub const GeneticAlgorithm = struct {
             .random = rand,
             .piece_constraints = piece_constraints,
             .rotated_pieces = rotated_pieces,
+            .eval_arena = std.heap.ArenaAllocator.init(allocator),
         };
     }
 
@@ -110,6 +116,7 @@ pub const GeneticAlgorithm = struct {
             self.allocator.free(row);
         }
         self.allocator.free(self.rotated_pieces);
+        self.eval_arena.deinit();
         // shared_nfp_cache and shared_fitness_cache are borrowed — not freed here.
     }
 
@@ -149,10 +156,15 @@ pub const GeneticAlgorithm = struct {
             }
         }
 
-        var packer = Packer.init(self.allocator, self.strip_width, self.grid_resolution);
+        // Reset the reusable arena so backing pages stay warm but the
+        // allocator position returns to zero — no mmap, no GPA lock per alloc.
+        _ = self.eval_arena.reset(.retain_capacity);
+        const eval_alloc = self.eval_arena.allocator();
+
+        var packer = Packer.init(eval_alloc, self.strip_width, self.grid_resolution);
         packer.use_nfp = self.use_nfp;
         packer.shared_nfp_cache = self.shared_nfp_cache;
-        defer packer.deinit();
+        // No defer packer.deinit() — eval_arena reset handles cleanup.
 
         for (chromo.sequence) |piece_idx| {
             const angle = chromo.rotations[piece_idx];
@@ -160,7 +172,7 @@ pub const GeneticAlgorithm = struct {
             const rotated = self.rotated_pieces[piece_idx][self.rotIdx(angle)];
 
             if (try packer.placePolygon(rotated, piece_idx, angle)) |placement| {
-                try packer.placed_items.append(self.allocator, placement);
+                try packer.placed_items.append(eval_alloc, placement);
             } else {
                 chromo.placement_failed = true;
                 chromo.fitness = std.math.floatMax(f32);
