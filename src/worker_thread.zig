@@ -31,6 +31,7 @@ pub fn workerThread(ctx: *WorkerContext) !void {
 
     ga.use_nfp = ctx.use_nfp;
     ga.mutation_rate = ctx.mutation_rate;
+    ga.shared_fitness_cache = ctx.shared_fitness_cache;
     ga.initializePopulation();
     try ga.evaluateAll();
 

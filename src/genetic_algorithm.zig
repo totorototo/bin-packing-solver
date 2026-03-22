@@ -4,6 +4,7 @@ const Polygon = @import("polygon.zig").Polygon;
 const Packer = @import("packer.zig").Packer;
 const PieceConstraints = @import("piece_constraints.zig").PieceConstraints;
 const NfpCache = @import("nfp_cache.zig").NfpCache;
+const SharedFitnessCache = @import("shared_fitness_cache.zig").SharedFitnessCache;
 
 pub const GeneticAlgorithm = struct {
     population_size: usize,
@@ -30,11 +31,11 @@ pub const GeneticAlgorithm = struct {
     /// Lazy NFP cache — allocated on first evaluateFitness call when use_nfp=true.
     /// Borrows rotated_pieces from this GA.  Owned by this GA instance.
     nfp_cache: ?NfpCache = null,
-    /// Fitness memoisation: chromosome fingerprint (Wyhash of sequence+rotations)
-    /// → previously computed fitness.  Elites are cloned unchanged into every new
-    /// generation; without this cache they would be re-evaluated redundantly.
-    /// Collision risk is negligible (u64 Wyhash for small deterministic inputs).
-    fitness_cache: std.AutoHashMap(u64, f32),
+    /// Shared fitness cache borrowed from the nesting coordinator.  When non-null,
+    /// all cores read from and write to the same mutex-guarded map so that every
+    /// chromosome evaluated by any thread is never re-evaluated by another.
+    /// Null in standalone / test contexts — caching is simply skipped.
+    shared_fitness_cache: ?*SharedFitnessCache = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -95,7 +96,6 @@ pub const GeneticAlgorithm = struct {
             .random = rand,
             .piece_constraints = piece_constraints,
             .rotated_pieces = rotated_pieces,
-            .fitness_cache = std.AutoHashMap(u64, f32).init(allocator),
         };
     }
 
@@ -110,7 +110,7 @@ pub const GeneticAlgorithm = struct {
         }
         self.allocator.free(self.rotated_pieces);
         if (self.nfp_cache) |*c| c.deinit();
-        self.fitness_cache.deinit();
+        // shared_fitness_cache is borrowed — not freed here.
     }
 
     /// Map a rotation angle (degrees) to its index in rotation_angles.
@@ -138,12 +138,15 @@ pub const GeneticAlgorithm = struct {
 
     pub fn evaluateFitness(self: *GeneticAlgorithm, chromo: *Chromosome) !void {
         // Fast path: return the memoised result if this exact chromosome was
-        // evaluated before (elites are copied verbatim each generation).
+        // evaluated before (elites are copied verbatim each generation, and
+        // migrated chromosomes may already be scored by a sibling core).
         const key = chromosomeHash(chromo);
-        if (self.fitness_cache.get(key)) |cached| {
-            chromo.fitness = cached;
-            chromo.placement_failed = cached == std.math.floatMax(f32);
-            return;
+        if (self.shared_fitness_cache) |sfc| {
+            if (sfc.get(key)) |cached| {
+                chromo.fitness = cached;
+                chromo.placement_failed = cached == std.math.floatMax(f32);
+                return;
+            }
         }
 
         // Lazily build the NFP cache on the first NFP evaluation; pass the
@@ -167,13 +170,13 @@ pub const GeneticAlgorithm = struct {
             } else {
                 chromo.placement_failed = true;
                 chromo.fitness = std.math.floatMax(f32);
-                try self.fitness_cache.put(key, chromo.fitness);
+                if (self.shared_fitness_cache) |sfc| try sfc.put(key, chromo.fitness);
                 return;
             }
         }
         chromo.placement_failed = false;
         chromo.fitness = packer.getLength();
-        try self.fitness_cache.put(key, chromo.fitness);
+        if (self.shared_fitness_cache) |sfc| try sfc.put(key, chromo.fitness);
     }
 
     pub fn evaluateAll(self: *GeneticAlgorithm) !void {

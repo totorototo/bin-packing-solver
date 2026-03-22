@@ -12,6 +12,7 @@ const Packer = @import("packer.zig").Packer;
 const generateRandomConvex = @import("helpers.zig").generateRandomConvex;
 const exportToSVG = @import("helpers.zig").exportToSVG;
 const workerThread = @import("worker_thread.zig").workerThread;
+const SharedFitnessCache = @import("shared_fitness_cache.zig").SharedFitnessCache;
 
 pub const NestingConfig = struct {
     strip_width: f32,
@@ -75,6 +76,9 @@ pub fn performNesting(
     var migration_pool = try MigrationPool.init(allocator, config.num_cores, pieces.len);
     defer migration_pool.deinit();
 
+    var shared_fitness_cache = SharedFitnessCache.init(allocator);
+    defer shared_fitness_cache.deinit();
+
     var contexts = try allocator.alloc(WorkerContext, config.num_cores);
     defer allocator.free(contexts);
 
@@ -103,6 +107,7 @@ pub fn performNesting(
             .verbose = config.verbose,
             .use_nfp = use_nfp,
             .mutation_rate = config.mutation_rate,
+            .shared_fitness_cache = &shared_fitness_cache,
             .timeout_end_ms = timeout_end_ms,
         };
     }
