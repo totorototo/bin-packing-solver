@@ -159,7 +159,8 @@ pub const Packer = struct {
                     // checkOverlapNFP would reject these anyway, but skipping early avoids
                     // the full NFP collision test for out-of-bounds positions.
                     if (abs.x >= 0) {
-                        try candidates.append(self.allocator, abs);
+                        if (abs.y >= 0 and abs.y + poly.height <= self.strip_width)
+                            try candidates.append(self.allocator, abs);
                         try candidates.append(self.allocator, Vec2.init(abs.x, 0));
                         if (self.strip_width > poly.height)
                             try candidates.append(self.allocator, Vec2.init(abs.x, self.strip_width - poly.height));
@@ -198,20 +199,13 @@ pub const Packer = struct {
         }
 
         // Select the leftmost (then bottommost) valid candidate.
+        // Candidates are sorted by (x, y) so the first valid entry is already optimal;
+        // break immediately rather than scanning the rest of the x-column.
         var best_pos: ?Vec2 = null;
-        var best_x: f32 = std.math.floatMax(f32);
-        var best_y: f32 = std.math.floatMax(f32);
-
         for (candidates.items) |candidate| {
-            // Since candidates are sorted by x, once we're past best_x we can stop.
-            if (best_pos != null and candidate.x > best_x + 1e-6) break;
-            if (self.checkOverlapNFP(poly, candidate, nfp_parts_list)) continue;
-            if (candidate.x < best_x - 1e-6 or
-                (candidate.x < best_x + 1e-6 and candidate.y < best_y - 1e-6))
-            {
-                best_x = candidate.x;
-                best_y = candidate.y;
+            if (!self.checkOverlapNFP(poly, candidate, nfp_parts_list)) {
                 best_pos = candidate;
+                break;
             }
         }
 
