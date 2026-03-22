@@ -22,8 +22,13 @@ pub const GeneticAlgorithm = struct {
     use_nfp: bool = false,
     /// Per-gene mutation probability applied during crossover.
     mutation_rate: f32 = 0.05,
+    /// Precomputed rotated polygons: rotated_pieces[piece_idx][rot_idx].
+    /// Built once at init for all pieces × rotation angles.  All fitness
+    /// evaluations borrow from this table — zero rotateByAngle calls in the
+    /// hot path.  Owned by this GA instance; freed in deinit.
+    rotated_pieces: [][]Polygon,
     /// Lazy NFP cache — allocated on first evaluateFitness call when use_nfp=true.
-    /// Owned by this GA instance; freed in deinit.
+    /// Borrows rotated_pieces from this GA.  Owned by this GA instance.
     nfp_cache: ?NfpCache = null,
     /// Fitness memoisation: chromosome fingerprint (Wyhash of sequence+rotations)
     /// → previously computed fitness.  Elites are cloned unchanged into every new
@@ -43,9 +48,38 @@ pub const GeneticAlgorithm = struct {
         piece_constraints: ?[]const PieceConstraints,
     ) !GeneticAlgorithm {
         const pop = try allocator.alloc(Chromosome, pop_size);
+        errdefer {
+            for (pop) |*c| c.deinit();
+            allocator.free(pop);
+        }
         for (pop) |*chromo| {
             chromo.* = try Chromosome.init(allocator, pieces.len);
             chromo.piece_constraints = piece_constraints;
+        }
+
+        // Build rotated_pieces[piece][rot_idx] once for the lifetime of this GA.
+        // All fitness evaluations borrow from this table — no rotateByAngle in the loop.
+        const angles = &[_]f32{ 0, 45, 90, 135, 180, 225, 270, 315 };
+        const rotated_pieces = try allocator.alloc([]Polygon, pieces.len);
+        errdefer allocator.free(rotated_pieces);
+        var n_built: usize = 0;
+        errdefer {
+            for (rotated_pieces[0..n_built]) |row| {
+                for (row) |*p| p.deinit(allocator);
+                allocator.free(row);
+            }
+        }
+        for (pieces, 0..) |piece, pi| {
+            const row = try allocator.alloc(Polygon, angles.len);
+            errdefer allocator.free(row);
+            var n_rots: usize = 0;
+            errdefer for (row[0..n_rots]) |*p| p.deinit(allocator);
+            for (angles, 0..) |angle, ri| {
+                row[ri] = try piece.rotateByAngle(allocator, angle);
+                n_rots += 1;
+            }
+            rotated_pieces[pi] = row;
+            n_built += 1;
         }
 
         return .{
@@ -54,12 +88,13 @@ pub const GeneticAlgorithm = struct {
             .mutant_size = mutant_sz,
             .population = pop,
             .pieces = pieces,
-            .rotation_angles = &[_]f32{ 0, 45, 90, 135, 180, 225, 270, 315 },
+            .rotation_angles = angles,
             .strip_width = strip_width,
             .grid_resolution = grid_resolution,
             .allocator = allocator,
             .random = rand,
             .piece_constraints = piece_constraints,
+            .rotated_pieces = rotated_pieces,
             .fitness_cache = std.AutoHashMap(u64, f32).init(allocator),
         };
     }
@@ -69,8 +104,21 @@ pub const GeneticAlgorithm = struct {
             chromo.deinit();
         }
         self.allocator.free(self.population);
+        for (self.rotated_pieces) |row| {
+            for (row) |*p| p.deinit(self.allocator);
+            self.allocator.free(row);
+        }
+        self.allocator.free(self.rotated_pieces);
         if (self.nfp_cache) |*c| c.deinit();
         self.fitness_cache.deinit();
+    }
+
+    /// Map a rotation angle (degrees) to its index in rotation_angles.
+    fn rotIdx(self: *const GeneticAlgorithm, angle: f32) u8 {
+        for (self.rotation_angles, 0..) |a, i| {
+            if (@abs(a - angle) < 1e-4) return @intCast(i);
+        }
+        return 0;
     }
 
     pub fn initializePopulation(self: *GeneticAlgorithm) void {
@@ -98,10 +146,10 @@ pub const GeneticAlgorithm = struct {
             return;
         }
 
-        // Lazily build the NFP cache on the first NFP evaluation.  The cache
-        // lives for the entire GA run so all future evaluations hit the cache.
+        // Lazily build the NFP cache on the first NFP evaluation; pass the
+        // already-built rotated table so getOrCompute never calls rotateByAngle.
         if (self.use_nfp and self.nfp_cache == null) {
-            self.nfp_cache = NfpCache.init(self.allocator, self.pieces, self.rotation_angles);
+            self.nfp_cache = NfpCache.init(self.allocator, self.rotated_pieces, self.rotation_angles);
         }
 
         var packer = Packer.init(self.allocator, self.strip_width, self.grid_resolution);
@@ -110,11 +158,11 @@ pub const GeneticAlgorithm = struct {
         defer packer.deinit();
 
         for (chromo.sequence) |piece_idx| {
-            const orig_poly = self.pieces[piece_idx];
-            var rotated = try orig_poly.rotateByAngle(self.allocator, chromo.rotations[piece_idx]);
-            defer rotated.deinit(self.allocator);
+            const angle = chromo.rotations[piece_idx];
+            // Borrow the precomputed rotated polygon — no heap allocation.
+            const rotated = self.rotated_pieces[piece_idx][self.rotIdx(angle)];
 
-            if (try packer.placePolygon(rotated, piece_idx, chromo.rotations[piece_idx])) |placement| {
+            if (try packer.placePolygon(rotated, piece_idx, angle)) |placement| {
                 try packer.placed_items.append(self.allocator, placement);
             } else {
                 chromo.placement_failed = true;

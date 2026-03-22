@@ -7,6 +7,9 @@
 //! reusing them across all fitness evaluations eliminates the dominant cost
 //! (decompose + Minkowski sum) from the inner loop.
 //!
+//! The rotated polygon table is owned by GeneticAlgorithm and passed in at
+//! init time; the cache borrows it and never calls rotateByAngle itself.
+//!
 //! The cache is NOT thread-safe; each worker thread owns its own instance.
 
 const std = @import("std");
@@ -22,18 +25,21 @@ const CacheKey = struct {
 
 pub const NfpCache = struct {
     map: std.AutoHashMap(CacheKey, []Polygon),
-    pieces: []const Polygon,
+    /// Borrowed from GeneticAlgorithm: rotated[piece_idx][rot_idx].
+    /// Not owned by the cache; do not free in deinit.
+    rotated: []const []Polygon,
     rotation_angles: []const f32,
     allocator: std.mem.Allocator,
 
+    /// Init is infallible: the rotated table is pre-built by the GA.
     pub fn init(
         allocator: std.mem.Allocator,
-        pieces: []const Polygon,
+        rotated: []const []Polygon,
         rotation_angles: []const f32,
     ) NfpCache {
         return .{
             .map = std.AutoHashMap(CacheKey, []Polygon).init(allocator),
-            .pieces = pieces,
+            .rotated = rotated,
             .rotation_angles = rotation_angles,
             .allocator = allocator,
         };
@@ -45,6 +51,7 @@ pub const NfpCache = struct {
             nfp_mod.freeNFPParts(self.allocator, parts_ptr.*);
         }
         self.map.deinit();
+        // rotated is borrowed — not freed here.
     }
 
     /// Map a rotation angle (degrees) to its index in rotation_angles.
@@ -58,6 +65,7 @@ pub const NfpCache = struct {
 
     /// Return the NFP parts for (piece_a @ rot_a) vs (piece_b @ rot_b),
     /// computing and caching them on the first call.
+    /// Borrows the precomputed rotated polygons — no rotateByAngle call.
     /// The returned slice is owned by the cache; do NOT free it.
     pub fn getOrCompute(
         self: *NfpCache,
@@ -75,11 +83,9 @@ pub const NfpCache = struct {
 
         if (self.map.get(key)) |parts| return parts;
 
-        var a_rot = try self.pieces[a_piece].rotateByAngle(self.allocator, self.rotation_angles[a_rot_idx]);
-        defer a_rot.deinit(self.allocator);
-
-        var b_rot = try self.pieces[b_piece].rotateByAngle(self.allocator, self.rotation_angles[b_rot_idx]);
-        defer b_rot.deinit(self.allocator);
+        // Borrow precomputed rotated polygons from the GA's table.
+        const a_rot = self.rotated[a_piece][a_rot_idx];
+        const b_rot = self.rotated[b_piece][b_rot_idx];
 
         const parts = try nfp_mod.computeNFPParts(self.allocator, a_rot, b_rot);
         try self.map.put(key, parts);
@@ -103,6 +109,45 @@ fn makeRect(allocator: std.mem.Allocator, w: f32, h: f32) !Polygon {
     return p;
 }
 
+/// Build a rotated_pieces table for testing: [piece][rot_idx].
+/// Caller must free with freeRotatedTable.
+fn buildRotatedTable(
+    allocator: std.mem.Allocator,
+    pieces: []const Polygon,
+    angles: []const f32,
+) ![][]Polygon {
+    const table = try allocator.alloc([]Polygon, pieces.len);
+    var n_built: usize = 0;
+    errdefer {
+        for (table[0..n_built]) |row| {
+            for (row) |*p| p.deinit(allocator);
+            allocator.free(row);
+        }
+        allocator.free(table);
+    }
+    for (pieces, 0..) |piece, pi| {
+        const row = try allocator.alloc(Polygon, angles.len);
+        errdefer allocator.free(row);
+        var n_rots: usize = 0;
+        errdefer for (row[0..n_rots]) |*p| p.deinit(allocator);
+        for (angles, 0..) |angle, ri| {
+            row[ri] = try piece.rotateByAngle(allocator, angle);
+            n_rots += 1;
+        }
+        table[pi] = row;
+        n_built += 1;
+    }
+    return table;
+}
+
+fn freeRotatedTable(allocator: std.mem.Allocator, table: [][]Polygon) void {
+    for (table) |row| {
+        for (row) |*p| p.deinit(allocator);
+        allocator.free(row);
+    }
+    allocator.free(table);
+}
+
 test "NfpCache - same key returns same slice pointer (no recompute)" {
     const allocator = std.testing.allocator;
     var a = try makeRect(allocator, 2, 1);
@@ -113,7 +158,10 @@ test "NfpCache - same key returns same slice pointer (no recompute)" {
     const pieces = [_]Polygon{ a, b };
     const angles = [_]f32{ 0, 90 };
 
-    var cache = NfpCache.init(allocator, &pieces, &angles);
+    const table = try buildRotatedTable(allocator, &pieces, &angles);
+    defer freeRotatedTable(allocator, table);
+
+    var cache = NfpCache.init(allocator, table, &angles);
     defer cache.deinit();
 
     const parts1 = try cache.getOrCompute(0, 0, 1, 0);
@@ -132,7 +180,10 @@ test "NfpCache - different rotation produces different entry" {
     const pieces = [_]Polygon{ a, b };
     const angles = [_]f32{ 0, 90 };
 
-    var cache = NfpCache.init(allocator, &pieces, &angles);
+    const table = try buildRotatedTable(allocator, &pieces, &angles);
+    defer freeRotatedTable(allocator, table);
+
+    var cache = NfpCache.init(allocator, table, &angles);
     defer cache.deinit();
 
     const parts_r0 = try cache.getOrCompute(0, 0, 1, 0);
@@ -147,7 +198,10 @@ test "NfpCache - rotIdx maps angle correctly" {
     const pieces = [_]Polygon{sq};
     const angles = [_]f32{ 0, 45, 90, 135, 180, 225, 270, 315 };
 
-    var cache = NfpCache.init(allocator, &pieces, &angles);
+    const table = try buildRotatedTable(allocator, &pieces, &angles);
+    defer freeRotatedTable(allocator, table);
+
+    var cache = NfpCache.init(allocator, table, &angles);
     defer cache.deinit();
 
     try std.testing.expectEqual(@as(u8, 0), cache.rotIdx(0));
