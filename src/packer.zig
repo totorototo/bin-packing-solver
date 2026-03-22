@@ -4,6 +4,7 @@ const Polygon = @import("polygon.zig").Polygon;
 const PlacedItem = @import("placed_item.zig").PlacedItem;
 const isOverlappingSAT = @import("sat.zig").isOverlappingSAT;
 const nfp_mod = @import("nfp.zig");
+const NfpCache = @import("nfp_cache.zig").NfpCache;
 
 pub const Packer = struct {
     strip_width: f32,
@@ -14,6 +15,16 @@ pub const Packer = struct {
     /// NFP handles any convex polygon pair and is the foundation for
     /// eventually supporting non-convex pieces.
     use_nfp: bool = false,
+    /// Optional precomputed NFP cache.  When non-null, placePolygonWithNFP
+    /// borrows NFP parts from it instead of recomputing them each call.
+    /// The cache is owned by the caller (GeneticAlgorithm); the Packer
+    /// only holds a borrowed pointer.
+    nfp_cache: ?*NfpCache = null,
+    /// Reusable buffer for NFP-vertex candidate positions.
+    /// Allocated once per Packer lifetime; cleared (without freeing) between
+    /// placements so the underlying memory is reused across all pieces in an
+    /// evaluation instead of being reallocated from scratch each time.
+    candidates_buf: std.ArrayList(Vec2),
 
     pub fn init(allocator: std.mem.Allocator, strip_width: f32, grid_resolution: f32) Packer {
         return .{
@@ -21,6 +32,7 @@ pub const Packer = struct {
             .strip_width = strip_width,
             .grid_resolution = grid_resolution,
             .placed_items = .{},
+            .candidates_buf = .{},
         };
     }
 
@@ -29,6 +41,7 @@ pub const Packer = struct {
             item.poly.deinit(self.allocator);
         }
         self.placed_items.deinit(self.allocator);
+        self.candidates_buf.deinit(self.allocator);
     }
 
     fn aabbOverlap(aPos: Vec2, aW: f32, aH: f32, bPos: Vec2, bW: f32, bH: f32) bool {
@@ -62,32 +75,76 @@ pub const Packer = struct {
     }
 
     /// Place `poly` using NFP-based collision detection (supports non-convex polygons).
-    /// Precomputes NFP parts for every already-placed piece, then finds the
-    /// leftmost-bottommost valid position from the finite set of NFP-vertex candidates.
-    /// This is exact (no grid quantization) and O(n²·m) where m = NFP vertex count.
+    /// Finds the leftmost-bottommost valid position from the finite set of NFP-vertex
+    /// candidates.  This is exact (no grid quantization) and O(n²·m) per evaluation.
+    ///
+    /// When `self.nfp_cache` is set, NFP parts are looked up (or lazily computed once)
+    /// from the cache — eliminating redundant decomposition + Minkowski sums across the
+    /// thousands of fitness evaluations in a GA run.  Without a cache the parts are
+    /// computed and freed on every call (original behaviour, used for the final pack).
     fn placePolygonWithNFP(self: *Packer, poly: Polygon, piece_id: usize, rotation: f32) !?PlacedItem {
-        // Precompute NFP parts ([]Polygon) per already-placed piece.
-        const nfp_parts_list = try self.allocator.alloc([]Polygon, self.placed_items.items.len);
-        var computed: usize = 0;
-        errdefer {
-            for (nfp_parts_list[0..computed]) |parts| nfp_mod.freeNFPParts(self.allocator, parts);
-            self.allocator.free(nfp_parts_list);
-        }
-        for (self.placed_items.items) |item| {
-            nfp_parts_list[computed] = try nfp_mod.computeNFPParts(self.allocator, item.poly, poly);
-            computed += 1;
-        }
-        defer {
-            for (nfp_parts_list) |parts| nfp_mod.freeNFPParts(self.allocator, parts);
-            self.allocator.free(nfp_parts_list);
-        }
+        const n_placed = self.placed_items.items.len;
 
+        // nfp_parts_list[i] — slice of NFP polygons for placed_items[i] vs poly.
+        // Ownership depends on whether we have a cache:
+        //   cache path   → borrowed from cache, must NOT free elements
+        //   no-cache path → owned here,          MUST free elements
+        const nfp_parts_list = try self.allocator.alloc([]Polygon, n_placed);
+
+        if (self.nfp_cache) |cache| {
+            // --- Cache path: borrow, no element ownership ---
+            defer self.allocator.free(nfp_parts_list);
+
+            const b_rot_idx = cache.rotIdx(rotation);
+            for (self.placed_items.items, 0..) |item, i| {
+                const a_rot_idx = cache.rotIdx(item.rotation);
+                nfp_parts_list[i] = try cache.getOrCompute(
+                    item.piece_id, a_rot_idx,
+                    piece_id, b_rot_idx,
+                );
+            }
+
+            return self.selectBestPosition(poly, piece_id, rotation, nfp_parts_list);
+        } else {
+            // --- No-cache path: own and free elements (original behaviour) ---
+            var computed: usize = 0;
+            errdefer {
+                for (nfp_parts_list[0..computed]) |parts| nfp_mod.freeNFPParts(self.allocator, parts);
+                self.allocator.free(nfp_parts_list);
+            }
+            for (self.placed_items.items) |item| {
+                nfp_parts_list[computed] = try nfp_mod.computeNFPParts(self.allocator, item.poly, poly);
+                computed += 1;
+            }
+            defer {
+                for (nfp_parts_list) |parts| nfp_mod.freeNFPParts(self.allocator, parts);
+                self.allocator.free(nfp_parts_list);
+            }
+
+            return self.selectBestPosition(poly, piece_id, rotation, nfp_parts_list);
+        }
+    }
+
+    /// Common placement logic shared by both cache and no-cache paths.
+    /// Builds NFP-vertex candidate positions, sorts them by x then y, and
+    /// returns the leftmost-bottommost valid placement.
+    fn selectBestPosition(
+        self: *Packer,
+        poly: Polygon,
+        piece_id: usize,
+        rotation: f32,
+        nfp_parts_list: []const []Polygon,
+    ) !?PlacedItem {
         // Build candidate positions. The optimal BLF placement always lies either
         // at (0,0), on the strip boundary, or touching another piece — i.e. at a
         // translated NFP vertex. For each NFP vertex we also try sliding to y=0
         // (bottom of strip) and y=strip_width-poly.height (top of strip) at that x.
-        var candidates = std.ArrayList(Vec2){};
-        defer candidates.deinit(self.allocator);
+        //
+        // Reuse self.candidates_buf across calls: clearRetainingCapacity keeps
+        // the heap allocation alive so later (larger) placements in the same
+        // evaluation avoid repeated growing reallocations.
+        self.candidates_buf.clearRetainingCapacity();
+        const candidates = &self.candidates_buf;
 
         try candidates.append(self.allocator, Vec2.init(0, 0));
         if (self.strip_width > poly.height) {
@@ -114,10 +171,13 @@ pub const Packer = struct {
         }
 
         // Sort by x (then y) so we can break as soon as x exceeds the best found so far.
+        // Uses exact float comparison (not epsilon) to satisfy strict weak ordering —
+        // an epsilon-based comparator can violate transitivity of the equivalence
+        // relation and trigger usize underflow inside the block sort algorithm.
+        // The epsilon early-exit below is independent and unaffected by this choice.
         std.mem.sort(Vec2, candidates.items, {}, struct {
             fn lessThan(_: void, a: Vec2, b: Vec2) bool {
-                if (a.x < b.x - 1e-6) return true;
-                if (a.x > b.x + 1e-6) return false;
+                if (a.x != b.x) return a.x < b.x;
                 return a.y < b.y;
             }
         }.lessThan);
@@ -371,7 +431,11 @@ test "NFP packer places two squares side by side (same as SAT)" {
     sat_r2.?.poly.deinit(allocator);
 
     // NFP packer
-    var nfp_packer = Packer{ .strip_width = 4.0, .grid_resolution = 1.0, .allocator = allocator, .placed_items = .{}, .use_nfp = true };
+    var nfp_packer = blk: {
+        var p = Packer.init(allocator, 4.0, 1.0);
+        p.use_nfp = true;
+        break :blk p;
+    };
     defer nfp_packer.deinit();
     var a2 = try makeSquare(allocator, 4.0);
     var b2 = try makeSquare(allocator, 4.0);
@@ -391,7 +455,11 @@ test "NFP packer places two squares side by side (same as SAT)" {
 
 test "NFP packer - single square placed at origin" {
     const allocator = std.testing.allocator;
-    var packer = Packer{ .strip_width = 10.0, .grid_resolution = 1.0, .allocator = allocator, .placed_items = .{}, .use_nfp = true };
+    var packer = blk: {
+        var p = Packer.init(allocator, 10.0, 1.0);
+        p.use_nfp = true;
+        break :blk p;
+    };
     defer packer.deinit();
 
     const v = try allocator.alloc(Vec2, 4);

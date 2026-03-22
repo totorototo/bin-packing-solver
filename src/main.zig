@@ -15,8 +15,8 @@ pub fn main() !void {
         pieces.deinit(allocator);
     }
 
-    const num_convex = 10;
-    const num_concave = 5;
+    const num_convex = 30;
+    const num_concave = 15;
 
     std.debug.print("Generating {d} random convex polygons...\n", .{num_convex});
     for (0..num_convex) |_| {

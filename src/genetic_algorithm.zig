@@ -3,6 +3,7 @@ const Chromosome = @import("chromosome.zig").Chromosome;
 const Polygon = @import("polygon.zig").Polygon;
 const Packer = @import("packer.zig").Packer;
 const PieceConstraints = @import("piece_constraints.zig").PieceConstraints;
+const NfpCache = @import("nfp_cache.zig").NfpCache;
 
 pub const GeneticAlgorithm = struct {
     population_size: usize,
@@ -21,6 +22,14 @@ pub const GeneticAlgorithm = struct {
     use_nfp: bool = false,
     /// Per-gene mutation probability applied during crossover.
     mutation_rate: f32 = 0.05,
+    /// Lazy NFP cache — allocated on first evaluateFitness call when use_nfp=true.
+    /// Owned by this GA instance; freed in deinit.
+    nfp_cache: ?NfpCache = null,
+    /// Fitness memoisation: chromosome fingerprint (Wyhash of sequence+rotations)
+    /// → previously computed fitness.  Elites are cloned unchanged into every new
+    /// generation; without this cache they would be re-evaluated redundantly.
+    /// Collision risk is negligible (u64 Wyhash for small deterministic inputs).
+    fitness_cache: std.AutoHashMap(u64, f32),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -51,6 +60,7 @@ pub const GeneticAlgorithm = struct {
             .allocator = allocator,
             .random = rand,
             .piece_constraints = piece_constraints,
+            .fitness_cache = std.AutoHashMap(u64, f32).init(allocator),
         };
     }
 
@@ -59,6 +69,8 @@ pub const GeneticAlgorithm = struct {
             chromo.deinit();
         }
         self.allocator.free(self.population);
+        if (self.nfp_cache) |*c| c.deinit();
+        self.fitness_cache.deinit();
     }
 
     pub fn initializePopulation(self: *GeneticAlgorithm) void {
@@ -67,9 +79,34 @@ pub const GeneticAlgorithm = struct {
         }
     }
 
+    /// Stable fingerprint for a chromosome: Wyhash over its sequence then rotations.
+    /// Rotations come from a fixed discrete set so their bit-patterns are consistent.
+    fn chromosomeHash(chromo: *const Chromosome) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.sliceAsBytes(chromo.sequence));
+        h.update(std.mem.sliceAsBytes(chromo.rotations));
+        return h.final();
+    }
+
     pub fn evaluateFitness(self: *GeneticAlgorithm, chromo: *Chromosome) !void {
+        // Fast path: return the memoised result if this exact chromosome was
+        // evaluated before (elites are copied verbatim each generation).
+        const key = chromosomeHash(chromo);
+        if (self.fitness_cache.get(key)) |cached| {
+            chromo.fitness = cached;
+            chromo.placement_failed = cached == std.math.floatMax(f32);
+            return;
+        }
+
+        // Lazily build the NFP cache on the first NFP evaluation.  The cache
+        // lives for the entire GA run so all future evaluations hit the cache.
+        if (self.use_nfp and self.nfp_cache == null) {
+            self.nfp_cache = NfpCache.init(self.allocator, self.pieces, self.rotation_angles);
+        }
+
         var packer = Packer.init(self.allocator, self.strip_width, self.grid_resolution);
         packer.use_nfp = self.use_nfp;
+        packer.nfp_cache = if (self.nfp_cache) |*c| c else null;
         defer packer.deinit();
 
         for (chromo.sequence) |piece_idx| {
@@ -82,11 +119,13 @@ pub const GeneticAlgorithm = struct {
             } else {
                 chromo.placement_failed = true;
                 chromo.fitness = std.math.floatMax(f32);
+                try self.fitness_cache.put(key, chromo.fitness);
                 return;
             }
         }
         chromo.placement_failed = false;
         chromo.fitness = packer.getLength();
+        try self.fitness_cache.put(key, chromo.fitness);
     }
 
     pub fn evaluateAll(self: *GeneticAlgorithm) !void {
