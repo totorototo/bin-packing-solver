@@ -10,7 +10,6 @@ const WorkerContext = @import("worker_context.zig").WorkerContext;
 const NestingResult = @import("nesting_result.zig").NestingResult;
 const Packer = @import("packer.zig").Packer;
 const generateRandomConvex = @import("helpers.zig").generateRandomConvex;
-const exportToSVG = @import("helpers.zig").exportToSVG;
 const workerThread = @import("worker_thread.zig").workerThread;
 const SharedFitnessCache = @import("shared_fitness_cache.zig").SharedFitnessCache;
 const SharedNfpCache = @import("shared_nfp_cache.zig").SharedNfpCache;

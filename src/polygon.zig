@@ -12,12 +12,32 @@ pub const Polygon = struct {
 
     /// Preferred constructor: allocates a copy of `verts` and computes the
     /// bounding box, area, and centroid in one step.  Free with `deinit`.
+    /// Vertex winding is normalized to CCW (required by NFP and ear-clipping).
     pub fn init(allocator: std.mem.Allocator, verts: []const Vec2) !Polygon {
         const owned = try allocator.alloc(Vec2, verts.len);
         @memcpy(owned, verts);
         var p = Polygon{ .vertices = owned };
+        p.ensureCCW();
         p.initBoundingBox();
         return p;
+    }
+
+    /// Reverse vertex order if the polygon is clockwise, so all polygons
+    /// entering the solver are consistently counter-clockwise.  CCW is
+    /// required by the Minkowski-sum NFP algorithm and ear-clipping triangulator.
+    /// ASTM D6673 files often use screen-coordinate (y-down) winding, which
+    /// appears CW in the solver's math-coordinate (y-up) frame.
+    pub fn ensureCCW(self: *Polygon) void {
+        if (self.vertices.len < 3) return;
+        var signed_area2: f32 = 0;
+        for (0..self.vertices.len) |i| {
+            const j = (i + 1) % self.vertices.len;
+            signed_area2 += self.vertices[i].x * self.vertices[j].y -
+                self.vertices[j].x * self.vertices[i].y;
+        }
+        if (signed_area2 < 0) {
+            std.mem.reverse(Vec2, self.vertices);
+        }
     }
 
     pub fn initBoundingBox(self: *Polygon) void {
@@ -267,6 +287,27 @@ test "Polygon clone - independent copy preserving geometry" {
     // Mutating copy must not affect original
     copy.vertices[0].x = 99;
     try std.testing.expectApproxEqAbs(@as(f32, 0), orig.vertices[0].x, 0.001);
+}
+
+test "Polygon.init - normalizes CW to CCW winding" {
+    const allocator = std.testing.allocator;
+    // A clockwise square (ASTM-style screen-coordinate winding):
+    // (0,0)→(0,1)→(1,1)→(1,0) has negative signed area.
+    const cw_verts = [_]Vec2{
+        Vec2.init(0, 0), Vec2.init(0, 1), Vec2.init(1, 1), Vec2.init(1, 0),
+    };
+    var p = try Polygon.init(allocator, &cw_verts);
+    defer p.deinit(allocator);
+
+    // After init the polygon must be CCW (positive signed area).
+    var signed_area2: f32 = 0;
+    for (0..p.vertices.len) |i| {
+        const j = (i + 1) % p.vertices.len;
+        signed_area2 += p.vertices[i].x * p.vertices[j].y -
+            p.vertices[j].x * p.vertices[i].y;
+    }
+    try std.testing.expect(signed_area2 > 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), p.area, 0.001);
 }
 
 test "Polygon rotation preserves area" {

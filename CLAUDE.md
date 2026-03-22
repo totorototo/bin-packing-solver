@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+See parent `../CLAUDE.md` for full ecosystem context (astm-parser, bin-packing-solver, nesting-pipeline).
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands

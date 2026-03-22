@@ -24,4 +24,3 @@ pub const NestingError = nesting.NestingError;
 pub const performNesting = nesting.performNesting;
 pub const generateRandomConvex = helpers.generateRandomConvex;
 pub const generateRandomConcave = helpers.generateRandomConcave;
-pub const exportToSVG = helpers.exportToSVG;

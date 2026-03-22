@@ -1,7 +1,6 @@
 const std = @import("std");
 const Vec2 = @import("vec2.zig").Vec2;
 const Polygon = @import("polygon.zig").Polygon;
-const PlacedItem = @import("placed_item.zig").PlacedItem;
 
 /// Graham scan convex hull — O(n log n). Returns a newly allocated CCW slice of hull vertices.
 fn convexHull(allocator: std.mem.Allocator, points: []const Vec2) ![]Vec2 {
@@ -113,37 +112,6 @@ pub fn generateRandomConcave(allocator: std.mem.Allocator, rand: std.Random, siz
     return poly;
 }
 
-pub fn exportToSVG(items: []const PlacedItem, width: f32, height: f32, filename: []const u8, efficiency: f32) !void {
-    const file = try std.fs.cwd().createFile(filename, .{});
-    defer file.close();
-    var buffer: [65536]u8 = undefined;
-    var w = file.writer(&buffer);
-    const writer = &w.interface;
-
-    try writer.print(
-        \\<?xml version="1.0" encoding="UTF-8"?>
-        \\<svg viewBox="0 0 {d} {d}" xmlns="http://www.w3.org/2000/svg" style="background:#1a1a1a">
-        \\  <text x="5" y="15" fill="#00ff00" font-size="12">Efficiency: {d:.2}% (Multi-core)</text>
-        \\
-    , .{ width, height, efficiency });
-
-    for (items) |item| {
-        const hue = (@as(u32, @truncate(item.piece_id)) *% 137) % 360;
-        const r = @as(u8, @intFromFloat(127 + 127 * @cos(@as(f32, @floatFromInt(hue)) * 0.017453)));
-        const g = @as(u8, @intFromFloat(127 + 127 * @cos((@as(f32, @floatFromInt(hue)) + 120) * 0.017453)));
-        const b = @as(u8, @intFromFloat(127 + 127 * @cos((@as(f32, @floatFromInt(hue)) + 240) * 0.017453)));
-
-        try writer.print("  <polygon points=\"", .{});
-        for (item.poly.vertices) |v| {
-            try writer.print("{d:.2},{d:.2} ", .{ v.x + item.pos.x, v.y + item.pos.y });
-        }
-        try writer.print("\" fill=\"rgb({d},{d},{d})\" stroke=\"#fff\" stroke-width=\"0.1\" fill-opacity=\"0.6\"/>\n", .{ r, g, b });
-    }
-
-    try writer.writeAll("</svg>");
-    try writer.flush();
-}
-
 test "generateRandomConcave - result is concave with positive area" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(789);
@@ -184,28 +152,3 @@ test "generateRandomConvex - vertices normalized to non-negative coords" {
     }
 }
 
-test "exportToSVG - produces file with SVG header" {
-    const allocator = std.testing.allocator;
-    const verts = try allocator.alloc(Vec2, 4);
-    verts[0] = Vec2.init(0, 0);
-    verts[1] = Vec2.init(3, 0);
-    verts[2] = Vec2.init(3, 3);
-    verts[3] = Vec2.init(0, 3);
-    var poly = Polygon{ .vertices = verts };
-    poly.initBoundingBox();
-    defer poly.deinit(allocator);
-
-    const item = PlacedItem{ .poly = poly, .pos = Vec2.init(0, 0), .rotation = 0, .piece_id = 0 };
-    const items = [_]PlacedItem{item};
-
-    const tmp_path = "test_svg_export_tmp.svg";
-    defer std.fs.cwd().deleteFile(tmp_path) catch {};
-
-    try exportToSVG(&items, 10, 10, tmp_path, 90.0);
-
-    const file = try std.fs.cwd().openFile(tmp_path, .{});
-    defer file.close();
-    var buf: [64]u8 = undefined;
-    const n = try file.read(&buf);
-    try std.testing.expect(std.mem.startsWith(u8, buf[0..n], "<?xml"));
-}

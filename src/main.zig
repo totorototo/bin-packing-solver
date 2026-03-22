@@ -48,8 +48,46 @@ pub fn main() !void {
     const nesting_ms = std.time.milliTimestamp() - nesting_start;
     std.debug.print("\nNesting time: {d}ms ({d:.1}s)\n", .{ nesting_ms, @as(f32, @floatFromInt(nesting_ms)) / 1000.0 });
 
-    var filename_buf: [128]u8 = undefined;
-    const filename = try std.fmt.bufPrint(&filename_buf, "nesting_{d}.svg", .{std.time.timestamp()});
-    try bps.exportToSVG(result.placed_items.items, result.final_length, 50.0, filename, result.efficiency);
-    std.debug.print("Saved to: {s}\n", .{filename});
+    const strip_width: f32 = 50.0;
+    var total_area: f32 = 0;
+    for (result.placed_items.items) |item| total_area += item.poly.area;
+    const efficiency = total_area / (strip_width * result.final_length) * 100.0;
+
+    try exportToSVG(result.placed_items.items, result.final_length, strip_width, "output.svg", efficiency);
+    std.debug.print("Pieces placed: {d}\nEfficiency: {d:.1}%\nStrip length: {d:.1}\nSaved to: output.svg\n", .{
+        result.placed_items.items.len,
+        efficiency,
+        result.final_length,
+    });
+}
+
+fn exportToSVG(items: []const bps.PlacedItem, width: f32, height: f32, filename: []const u8, efficiency: f32) !void {
+    const file = try std.fs.cwd().createFile(filename, .{});
+    defer file.close();
+    var buffer: [65536]u8 = undefined;
+    var bw = file.writer(&buffer);
+    const writer = &bw.interface;
+
+    try writer.print(
+        \\<?xml version="1.0" encoding="UTF-8"?>
+        \\<svg viewBox="0 0 {d} {d}" xmlns="http://www.w3.org/2000/svg" style="background:#1a1a1a">
+        \\  <text x="5" y="15" fill="#00ff00" font-size="12">Efficiency: {d:.2}%</text>
+        \\
+    , .{ width, height, efficiency });
+
+    for (items) |item| {
+        const hue = (@as(u32, @truncate(item.piece_id)) *% 137) % 360;
+        const r = @as(u8, @intFromFloat(127 + 127 * @cos(@as(f32, @floatFromInt(hue)) * 0.017453)));
+        const g = @as(u8, @intFromFloat(127 + 127 * @cos((@as(f32, @floatFromInt(hue)) + 120) * 0.017453)));
+        const b = @as(u8, @intFromFloat(127 + 127 * @cos((@as(f32, @floatFromInt(hue)) + 240) * 0.017453)));
+
+        try writer.print("  <polygon points=\"", .{});
+        for (item.poly.vertices) |v| {
+            try writer.print("{d:.2},{d:.2} ", .{ v.x + item.pos.x, v.y + item.pos.y });
+        }
+        try writer.print("\" fill=\"rgb({d},{d},{d})\" stroke=\"#fff\" stroke-width=\"0.1\" fill-opacity=\"0.6\"/>\n", .{ r, g, b });
+    }
+
+    try writer.writeAll("</svg>");
+    try writer.flush();
 }
