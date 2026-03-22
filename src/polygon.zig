@@ -8,6 +8,16 @@ pub const Polygon = struct {
     area: f32 = 0,
     centroid: Vec2 = Vec2.init(0, 0),
 
+    /// Preferred constructor: allocates a copy of `verts` and computes the
+    /// bounding box, area, and centroid in one step.  Free with `deinit`.
+    pub fn init(allocator: std.mem.Allocator, verts: []const Vec2) !Polygon {
+        const owned = try allocator.alloc(Vec2, verts.len);
+        @memcpy(owned, verts);
+        var p = Polygon{ .vertices = owned };
+        p.initBoundingBox();
+        return p;
+    }
+
     pub fn initBoundingBox(self: *Polygon) void {
         if (self.vertices.len == 0) return;
         var max_x: f32 = self.vertices[0].x;
@@ -144,6 +154,16 @@ pub const Polygon = struct {
         allocator.free(self.vertices);
     }
 };
+
+test "Polygon.init - computes bounding box automatically" {
+    const allocator = std.testing.allocator;
+    const verts = [_]Vec2{ Vec2.init(0, 0), Vec2.init(3, 0), Vec2.init(3, 2), Vec2.init(0, 2) };
+    var p = try Polygon.init(allocator, &verts);
+    defer p.deinit(allocator);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), p.width, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), p.height, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), p.area, 0.001);
+}
 
 test "Polygon area - unit square" {
     const allocator = std.testing.allocator;
